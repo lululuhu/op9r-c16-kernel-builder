@@ -1,0 +1,41 @@
+# zsmalloc 6.12 backport 补丁系列
+#
+# 分为三部分，按优先级排列:
+#   A. per-size_class lock (推荐, 独立应用)
+#   B. zpdesc 抽象 (实验性, 仅 5.10)
+#   C. proper page type (可选)
+#
+# 使用 generate-patches.sh 生成实际补丁文件
+# 默认仅生成部分 A，需要 B/C 时用 --all 参数
+
+# === 部分 A: per-size_class lock 回归 (推荐) ===
+# 这些补丁恢复 per-size_class 锁粒度，改善扩展性
+
+# A1. 回退 pool spinlock 合并
+01-zsmalloc-revert-pool-spinlock.patch
+
+# A2. 恢复 per-size_class lock
+02-zsmalloc-per-size-class-lock.patch
+
+# A3. 清理 migrate_lock 相关代码
+03-zsmalloc-migrate-lock-cleanup.patch
+
+# === 部分 B: zpdesc 内存描述符 (实验性, 仅 5.10) ===
+# 取消注释以下行以启用 (需要 5.10 基线 + 充分测试)
+
+# B1-B21: zpdesc 转换系列 (21 个补丁)
+# 04-zsmalloc-zpdesc-introduce.patch
+# 05-zsmalloc-zpdesc-obj-to-zpdesc.patch
+# 06-zsmalloc-zpdesc-zs-free.patch
+# 07-zsmalloc-zpdesc-init-zspage.patch
+# 08-zsmalloc-zpdesc-migrate.patch
+# 09-zsmalloc-zpdesc-obj-malloc.patch
+# 10-zsmalloc-zpdesc-get-first-next.patch
+# ... (共 21 个, 详见 generate-patches.sh --all)
+
+# === 部分 C: proper page type (可选) ===
+# 取消注释以下行以启用
+
+# C1. zsmalloc 使用 proper page type
+# 25-zsmalloc-proper-page-type.patch
+# 26-zsmalloc-remove-page-mapcount-reset.patch

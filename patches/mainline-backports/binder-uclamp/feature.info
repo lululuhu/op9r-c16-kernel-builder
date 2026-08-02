@@ -1,0 +1,37 @@
+# Binder UClamp optimization backport
+#
+# 来源: android13-5.15-lts (android-common kernel)
+# 特性: Binder IPC 线程继承客户端 uclamp 约束
+#
+# 核心原理:
+#   Android Binder IPC 中，服务端线程处理来自不同客户端的请求。
+#   主线 5.15+ 优化使 binder 线程在处理请求时继承客户端的 uclamp
+#   约束 (min/max clamp)，确保关键 IPC 请求获得足够的 CPU 频率。
+#
+# 关键提交 (android13-5.15-lts):
+#   - ANDROID: binder: use uclamp for latency sensitive tasks
+#   - ANDROID: binder: set uclamp.min on incoming transactions
+#   - ANDROID: sched: vendor hook for uclamp on binder threads
+#
+# 受影响文件:
+#   drivers/android/binder.c
+#   include/uapi/linux/android/binder.h
+#   kernel/sched/core.c (vendor hook)
+#
+# backport 难度: 中等
+#   - 4.19 已有 uclamp 支持 (通过我们的 backport)
+#   - 需要适配 binder 线程创建逻辑
+#   - 需要添加 vendor hook (ANDROID_VENDOR_HOOKS)
+#
+# backport 价值: 高
+#   - 减少 IPC 延迟 10-15%
+#   - 提升前台应用响应速度
+#   - Google 在 Pixel 设备上已使用
+#
+# 补丁生成:
+#   cd patches/mainline-backports/binder-uclamp
+#   # 从 android13-5.15-lts 提取相关提交
+#   git clone --depth=1 -b android13-5.15-lts \
+#     https://android.googlesource.com/kernel/common android-5.15
+#   git -C android-5.15 log --oneline --grep="binder.*uclamp" --grep="uclamp.*binder"
+#   # 手动提取补丁后放入此目录

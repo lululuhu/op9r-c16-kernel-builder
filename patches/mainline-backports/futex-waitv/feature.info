@@ -1,0 +1,6 @@
+name: futex_waitv (Multi-futex Wait)
+source: Linux 5.16
+description: futex_waitv() syscall allows waiting on multiple futexes simultaneously. Improves cross-platform game compatibility (Wine/Proton). Relatively independent code change.
+config: CONFIG_FUTEX_WAITV=y (if available)
+status: experimental
+baseline: 4.19

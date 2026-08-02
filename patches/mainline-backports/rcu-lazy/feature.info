@@ -1,0 +1,6 @@
+name: RCU_LAZY (Lazy RCU Callbacks)
+source: Linux 6.6
+description: Timer-based RCU callback batching. Reduces power consumption 5-10% on idle/light loads by batching RCU callbacks instead of processing them immediately.
+config: CONFIG_RCU_LAZY=y
+status: experimental
+baseline: 4.19

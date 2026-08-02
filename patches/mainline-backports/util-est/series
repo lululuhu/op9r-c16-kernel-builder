@@ -1,0 +1,16 @@
+# util_est backport series (Linux 5.0 → 4.19)
+# Apply in order — later patches depend on earlier ones
+# NOTE: If SCHED_UTIL_EST already exists in the kernel Kconfig,
+# these patches are NOT needed — just enable the config option.
+# Run generate-patches.sh first to download the patch files.
+01-util-est-core.patch
+02-util-est-fastup.patch
+03-util-est-filtered.patch
+04-util-est-dequeue-update.patch
+05-util-est-avoid-deadline-bias.patch
+06-util-est-fix-pelt-decay.patch
+07-util-est-fix-wrong-cpu.patch
+08-util-est-fair-userspace.patch
+09-util-est-make-optional.patch
+10-util-est-fix-schedutil-max.patch
+11-util-est-remove-debug.patch

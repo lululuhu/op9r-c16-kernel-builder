@@ -1,0 +1,6 @@
+name: MGLRU (Multi-Gen LRU)
+source: Linux 5.18 / 6.1
+description: Multi-generational LRU page reclaim. Improves memory pressure handling, reduces CPU usage for page scanning, better cold/hot page detection. Google adopted in Android 6.1 kernels.
+config: CONFIG_LRU_GEN=y, CONFIG_LRU_GEN_ENABLED=y
+status: experimental
+baseline: 4.19

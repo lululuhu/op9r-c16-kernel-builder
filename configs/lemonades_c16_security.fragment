@@ -1,0 +1,238 @@
+# ===================================================================
+# lemonades_c16_security.fragment
+# Security hardening + BBG anti-crash config fragment
+# for OnePlus 9R (lemonades / SM8250 / Kona)
+# Target: Linux 4.19 + ColorOS 16 (Android 16)
+#
+# 本片段 (fragment) 提供两大核心能力:
+#   1. BBG 防格机 (Anti-crash / Anti-panic protection)
+#      - 检测内核异常并触发干净的重启，避免设备"格机"(变砖/数据损坏)
+#      - oops -> panic -> 定时自动重启，最大限度保证可恢复性
+#   2. Security hardening for known 4.19 CVEs
+#      - 针对 4.19 已知 CVE (Spectre/Meltdown/堆溢出等) 的缓解措施
+#   3. Additional security hardening
+#      - RWX 分离、引用计数、usercopy 加固等通用加固项
+#
+# 合并顺序: 在 lemonades_c16_extreme.fragment 之后应用
+# 说明: 部分选项需要 5.x 才可用，4.19 的 olddefconfig 会自动忽略未知项
+# ===================================================================
+
+# ###################################################################
+# 第一部分: BBG 防格机 (Anti-crash / Anti-panic protection)
+# ###################################################################
+# 目标: 当内核发生致命错误时，不走"半死不活"的挂起状态，
+#       而是转为 panic 并在超时后自动重启，使设备能自我恢复，
+#       从而避免因内核状态损坏导致文件系统损坏 (即"格机")。
+# ###################################################################
+
+# ---- oops 转 panic: 将内核 oops 升级为 panic ----
+# 普通情况下 oops 只杀死当前进程，内核继续运行在已损坏的状态下，
+# 极易引发后续的连锁损坏 (格机根因之一)。
+# 开启后 oops 直接转 panic，配合下面的超时重启实现干净恢复。
+CONFIG_PANIC_ON_OOPS=y
+# oops 转 panic 的超时 (秒)；0 表示立即转 panic
+CONFIG_PANIC_ON_OOPS_VALUE=0
+
+# ---- panic 自动重启超时 ----
+# 发生 panic 后等待 5 秒自动重启，保证设备能自我恢复
+# (留出 5 秒以便 RAMOOPS/pstore 抓取崩溃日志)
+CONFIG_PANIC_TIMEOUT=5
+
+# ---- 硬锁死检测 (Hard lockup detector) ----
+# 检测 CPU 在内核态长时间禁中断死循环，触发 panic 并重启
+# 依赖 CONFIG_LOCKUP_DETECTOR (通常由 defconfig 已选)
+CONFIG_HARDLOCKUP_DETECTOR=y
+# 软锁死检测 (soft lockup): 检测内核长时间不让出 CPU
+CONFIG_SOFTLOCKUP_DETECTOR=y
+
+# ---- 挂起任务检测 (Hung task detector) ----
+# 检测长时间处于 D 状态 (不可中断睡眠) 的任务
+CONFIG_DETECT_HUNG_TASK=y
+# 挂起任务超时阈值: 120 秒后报警并打印调用栈
+CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=120
+
+# ---- 工作队列看门狗 (Workqueue watchdog) ----
+# 检测工作队列 (workqueue) 长时间卡住的情况
+CONFIG_WQ_WATCHDOG=y
+
+# ---- 调度栈结束检查 ----
+# 检测调度器栈溢出，发现栈尾被覆盖时触发 BUG
+# 这是轻量级检查，保留
+CONFIG_SCHED_STACK_END_CHECK=y
+
+# ---- 链表与散列表完整性校验 ----
+# NOTE: 以下 DEBUG 选项在生产环境中会引入显著的运行时开销 (每次链表/散列表操作都做校验)
+# 在性能优先的内核中应禁用，仅保留用于调试构建
+# CONFIG_DEBUG_LIST is not set
+# CONFIG_DEBUG_SG is not set
+
+# ---- 数据损坏处理 ----
+# NOTE: CONFIG_BUG_ON_DATA_CORRUPTION 在检测到内核数据结构损坏时直接 panic。
+#       虽然出发点是防止"格机"，但实际效果是让设备更容易意外重启 —
+#       很多轻微的数据损坏 (如竞态条件导致的链表节点重复添加) 在正常内核中
+#       只是打印一条警告并跳过，但开启此选项会直接 panic + 重启。
+#       对于日常使用的手机内核，这种过度反应反而降低了用户体验。
+#       保留 PANIC_ON_OOPS + PANIC_TIMEOUT 已经足够处理真正的致命错误。
+# CONFIG_BUG_ON_DATA_CORRUPTION is not set
+
+# ---- 虚拟地址转换检查 ----
+# NOTE: CONFIG_DEBUG_VIRTUAL 在每次 ioremap/virt_to_phys 操作时做合法性校验
+#       生产环境开销过大，仅用于调试
+# CONFIG_DEBUG_VIRTUAL is not set
+
+# ---- 崩溃日志持久化: pstore/ramoops (配合 panic 重启抓取日志) ----
+# panic 重启后通过 pstore 保留上一轮的崩溃日志，便于事后分析"格机"原因
+CONFIG_PSTORE=y
+CONFIG_PSTORE_CONSOLE=y
+CONFIG_PSTORE_PMSG=y
+CONFIG_PSTORE_RAM=y
+
+
+# ###################################################################
+# 第二部分: 针对 4.19 已知 CVE 的安全加固
+# ###################################################################
+# 目标: 缓解 4.19 时代爆出的 CPU 侧信道、堆利用、UAF 等漏洞。
+# ###################################################################
+
+# ---- SLAB 空闲链表随机化 (heap randomization) ----
+# 打乱 slab 空闲链表顺序，增加堆溢出利用的难度
+CONFIG_SLAB_FREELIST_RANDOM=y
+
+# ---- SLAB 空闲链表指针加固 (freelist pointer protection) ----
+# 对空闲链表 next 指针做混淆/校验，防止被溢出篡改
+CONFIG_SLAB_FREELIST_HARDENED=y
+
+# ---- KASLR: 内核地址空间随机化 ----
+# 随机化内核加载基址，缓解信息泄露与 ROP 利用
+CONFIG_RANDOMIZE_BASE=y
+
+# ---- 模块区域完整随机化 ----
+# 将可加载模块放置在完整 2GB 区域内随机位置，
+# 增大模块相关利用的盲打难度
+CONFIG_RANDOMIZE_MODULE_REGION_FULL=y
+
+# ---- KPTI: 页表隔离 (Meltdown / CVE-2017-5754 缓解) ----
+# 隔离用户态与内核态页表，防止用户态读取内核内存
+# 可通过内核命令行 kpti=0 在运行时关闭 (性能敏感场景)
+CONFIG_PAGE_TABLE_ISOLATION=y
+# NOTE: ARM64 平台上 KPTI 对应的实际配置项是 UNMAP_KERNEL_AT_EL0，
+#       SM8250 (Cortex-A77) 受 Spectre/Meltdown 影响应启用:
+CONFIG_UNMAP_KERNEL_AT_EL0=y
+
+# ---- Retpoline: Spectre v2 (CVE-2017-5715) 缓解 ----
+# 替换间接分支为目标地址推测安全的序列，缓解分支预测侧信道
+CONFIG_RETPOLINE=y
+
+# ---- 栈溢出保护 (Stack Protector, Strong) ----
+# 在函数栈帧插入 Canary，返回前校验，检测栈溢出
+CONFIG_STACKPROTECTOR=y
+CONFIG_STACKPROTECTOR_STRONG=y
+
+# ---- FORTIFY_SOURCE: 编译期缓冲区溢出检测 ----
+# 对常见字符串/内存操作做边界检查
+CONFIG_FORTIFY_SOURCE=y
+
+# ---- 栈零初始化 (zero-init stack) ----
+# NOTE: CONFIG_INIT_STACK_ALL 在 5.3 (commit 3b045d0b) 引入，
+#       4.19 原生不可用，olddefconfig 会忽略；如已 backport 则生效。
+#       使用 Clang 时通过 KCFLAGS=-ftrivial-auto-var-init=zero 达到同等效果
+#       (已在 build.yml / build.sh 的 KCFLAGS 中添加)。
+CONFIG_INIT_STACK_ALL=y
+
+# ---- 分配即清零 / 释放即清零 ----
+# 新分配的页/对象默认清零，杜绝未初始化内存泄露
+# 开销很小 (~1-2%)，保留
+CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
+# 释放时即清零，防止 UAF (use-after-free) 读取到敏感残留数据
+# NOTE: INIT_ON_FREE 有 ~5-10% 的性能损耗 (内存密集型工作负载)
+#       对于性能优先的移动设备内核，建议关闭。
+#       UAF 防护主要依赖 KASAN (调试用) 和良好的代码质量，
+#       生产环境用 INIT_ON_ALLOC 已足够防止信息泄露。
+# CONFIG_INIT_ON_FREE_DEFAULT_ON is not set
+
+# ---- GCC 插件: 结构体未初始化字段清零 ----
+# NOTE: 需要启用 CONFIG_GCC_PLUGINS 且使用 GCC 工具链。
+#       本项目使用 Proton Clang，下列项在 Clang 下不可用，
+#       olddefconfig 会自动忽略；若切换到 GCC 构建则生效。
+CONFIG_GCC_PLUGINS=y
+# 对所有按引用传递的结构体自动清零，缓解信息泄露类漏洞
+CONFIG_GCC_PLUGIN_STRUCTLEAK=y
+CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF_ALL=y
+
+
+# ###################################################################
+# 第三部分: 通用安全加固 (Additional security hardening)
+# ###################################################################
+
+# ---- Lockdown LSM: 4.19 不可用 ----
+# CONFIG_SECURITY_LOCKDOWN_LSM 依赖 5.4 引入的 DEFINE_EARLY_LSM 框架，
+# 4.19 不支持，显式标注 not set 以明示意图
+# CONFIG_SECURITY_LOCKDOWN_LSM is not set
+
+# ---- 模块签名: 为厂商兼容性禁用 ----
+# Android 厂商模块使用高通/一加 OEM 密钥签名，
+# 强制开启 MODULE_SIG 会拒绝加载厂商模块导致无法开机。
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+# CONFIG_MODULE_SIG is not set
+# CONFIG_MODULE_SIG_FORCE is not set
+# CONFIG_MODULE_SIG_ALL is not set
+
+# ---- 内核 / 模块 RWX 严格分离 ----
+# 禁止内核代码段可写、数据段可执行，防止代码注入
+CONFIG_STRICT_KERNEL_RWX=y
+# 对加载的内核模块同样执行 RWX 分离
+CONFIG_STRICT_MODULE_RWX=y
+
+# ---- 加固的用户态内存拷贝 (Hardened usercopy) ----
+# 校验 copy_to_user / copy_from_user 的源/目标是否位于合法的 slab 对象内，
+# 防止越界拷贝泄露内核数据
+CONFIG_HARDENED_USERCOPY=y
+# 关闭回退模式: 回退模式会在无法校验时跳过检查，削弱防护
+# CONFIG_HARDENED_USERCOPY_FALLBACK is not set
+
+# ---- 完整引用计数检查 (Full refcount_t) ----
+# 将引用计数溢出/下溢视为错误并触发防御，缓解 UAF 与重复释放
+CONFIG_REFCOUNT_FULL=y
+
+# ---- 禁用 slab 合并 (SLAB merge) ----
+# 默认情况下相同大小的 slab cache 会合并，便于溢出跨对象利用；
+# 关闭合并使各 cache 独立，缩小利用面
+# CONFIG_SLAB_MERGE_DEFAULT is not set
+
+# ---- 页分配器随机化 (Shuffle page allocator) ----
+# 随机化空闲页分配顺序，缓解页级预测与利用
+CONFIG_SHUFFLE_PAGE_ALLOCATOR=y
+
+# ---- 限制 /dev/mem 访问 (STRICT_DEVMEM) ----
+# 阻止用户态通过 /dev/mem 直接访问内核内存
+CONFIG_STRICT_DEVMEM=y
+
+# ---- 虚拟映射内核栈 (VMAP_STACK) ----
+# 使用虚拟连续但物理不连续的内核栈，栈溢出时触发页错误而非静默覆盖
+CONFIG_VMAP_STACK=y
+# 线程信息移入 task_struct (减少栈溢出攻击面)
+CONFIG_THREAD_INFO_IN_TASK=y
+
+# ---- ARM64 特定加固 ----
+# ARM64 用户态内存访问权限检查
+CONFIG_ARM64_SW_TTBR0_PAN=y
+
+# ---- 网络安全加固 ----
+# 禁用 TCP 管理信息泄露 (防止 RST 攻击扫描)
+CONFIG_TCP_SYN_COOKIES=y
+# 限制原始套接字 (防止本地提权)
+# CONFIG_LEGACY_PTYS is not set
+
+# ---- 内核地址限制 (ARM64) ----
+# 用户态/内核态地址空间隔离
+# CONFIG_ARM64_UAO is not set
+
+# ---- 禁用危险接口 ----
+# CONFIG_BPF_UNPRIV_DEFAULT_OFF is not set
+# CONFIG_USER_NS 在 droidspaces 中启用 (容器需要)
+# CONFIG_LEGACY_VSYSCALL_NONE (x86 only, ARM64 不适用)
+
+# ===================================================================
+# 结束: lemonades_c16_security.fragment
+# ===================================================================

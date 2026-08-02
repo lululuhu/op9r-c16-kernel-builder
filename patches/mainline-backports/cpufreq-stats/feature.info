@@ -1,0 +1,35 @@
+# cpufreq stats driver update to mainline
+#
+# 特性: 更新 cpufreq stats 驱动到主线状态
+# 目标: 更精确的 CPU 频率统计、更低的 overhead
+#
+# 主线变更 (5.x → 6.x):
+#   - 重构 cpufreq_stats 为 cpufreq_stats_record
+#   - 使用 per-cpu rwsem 替代全局锁
+#   - 添加 transition table 到 sysfs
+#   - 支持 per-policy 统计
+#   - 清理 stale 统计数据
+#
+# 关键提交:
+#   - cpufreq: stats: Add routine to free stats
+#   - cpufreq: stats: Use policy rwsem instead of stats lock
+#   - cpufreq: stats: Don't account for invalid entries
+#   - cpufreq: stats: Fix table duplication on policy init
+#
+# 受影响文件:
+#   drivers/cpufreq/cpufreq_stats.c
+#   include/linux/cpufreq.h
+#
+# backport 难度: 中等
+#   - 4.19 cpufreq stats 结构与主线差异较大
+#   - 需要适配 vendor cpufreq driver 接口
+#
+# backport 价值: 中
+#   - 更准确的频率统计
+#   - 为功耗分析提供更好的数据
+#
+# 补丁生成:
+#   cd patches/mainline-backports/cpufreq-stats
+#   git clone --depth=1 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git linux-mainline
+#   git -C linux-mainline log --oneline -- drivers/cpufreq/cpufreq_stats.c | head -20
+#   # 提取相关提交的补丁

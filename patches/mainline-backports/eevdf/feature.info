@@ -1,0 +1,81 @@
+# EEVDF 调度器 — 无法 backport 到 4.19
+#
+# 特性: EEVDF (Earliest Eligible Virtual Deadline First)
+# 主线版本: 6.6 (完全替换 CFS)
+# 作者: Peter Zijlstra
+# LWN: https://lwn.net/Articles/925769/
+#
+# ===================================================================
+# 不可 backport 的原因
+# ===================================================================
+#
+# EEVDF 不是简单的功能增强，而是完全替换了 CFS (Completely Fair
+# Scheduler) 的核心算法:
+#
+# 1. 替换 rbtree 为增强版 rbtree (augmented rbtree)
+#    - CFS 使用 sorted rbtree 按 vruntime 排序
+#    - EEVDF 使用 augmented rbtree 同时跟踪 eligible 和 deadline
+#    - 4.19 的 rbtree 实现不支持 augmented 操作
+#
+# 2. 新增概念: lag, eligibility, virtual deadline
+#    - CFS 只有 vruntime (公平份额)
+#    - EEVDF 引入 lag (历史欠债)、eligibility (是否有资格运行)、
+#      virtual deadline (延迟保证)
+#    - 这些概念贯穿整个 sched/fair.c (数千行)
+#
+# 3. 替换所有 placement/migration 逻辑
+#    - CFS: place_entity() 基于 vruntime
+#    - EEVDF: place_entity() 基于 lag + avg_vruntime
+#    - migrate_task_rq_fair() 完全重写
+#
+# 4. 依赖 5.x+ 的基础设施
+#    - sched_avg_vruntime (5.x 新增)
+#    - sched_entity 的 avg_vruntime 字段
+#    - cfs_rq 的 avg_vruntime, avg_load 字段
+#    - 4.19 的 sched_entity 和 cfs_rq 结构体不同
+#
+# 5. 补丁量
+#    - 完整 EEVDF 系列约 50+ 补丁
+#    - 涉及 kernel/sched/fair.c 全部重写 (~12000 行)
+#    - 还需要 sched/core.c, sched/sched.h 等配套修改
+#
+# 结论: 在 4.19 上 backport EEVDF 需要重写整个调度器子系统，
+#       工作量等同于升级到 6.6+ 基线。不推荐。
+#
+# ===================================================================
+# 替代方案 (4.19 上的调度优化)
+# ===================================================================
+#
+# 1. WALT (Window Assisted Load Tracking) — 已启用
+#    - QCOM 的负载跟踪算法，比 PELT 更适合移动设备
+#    - CONFIG_SCHED_WALT=y
+#
+# 2. SchedTune (EAS 增强调优) — 已启用
+#    - Per-task/per-cgroup 性能偏好
+#    - CONFIG_SCHED_TUNE=y
+#
+# 3. Core Control — 已启用
+#    - 动态控制 CPU 核心在线/离线
+#    - CONFIG_SCHED_CORE_CTL=y
+#
+# 4. uclamp (利用率钳位) — 已启用
+#    - Per-task 频率下限/上限钳位
+#    - CONFIG_UCLAMP_TASK=y
+#
+# 5. latency-nice (可 backport)
+#    - 5.x 引入的 per-task 延迟偏好
+#    - 比 EEVDF 简单得多，可以适配 4.19
+#    - 通过 sched_setattr() 设置
+#
+# 6. 帧感知调度
+#    - HZ=300 适配高刷新率屏幕
+#    - NO_HZ_FULL 减少空闲中断
+#    - sched_hrtick 更精确的抢占
+#
+# 7. EAS (Energy Aware Scheduling) — 已启用
+#    - 基于 energy model 的任务放置
+#    - CONFIG_ENERGY_MODEL=y
+#
+# 8. Binder UClamp backport — 计划中
+#    - IPC 线程继承 uclamp 约束
+#    - 减少前台应用 IPC 延迟

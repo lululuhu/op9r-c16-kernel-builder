@@ -1,0 +1,32 @@
+# util_est: Utilization Estimation (EWMA)
+# Mainline version: 5.0
+# Commit: 7f65342d7f25 ("sched/fair: Add util_est")
+#
+# util_est uses an Exponentially Weighted Moving Average (EWMA) to track
+# task utilization, providing a more stable signal for frequency selection
+# and Energy Aware Scheduling (EAS) decisions.
+#
+# Benefits:
+#   - Reduces frequency oscillation (tasks ramp up faster, ramp down slower)
+#   - Improves EAS task placement decisions
+#   - Low overhead (only updated at dequeue time)
+#   - CONFIG_SCHED_UTIL_EST_FASTUP: enables faster ramp-up for interactive tasks
+#
+# Source files (modified):
+#   kernel/sched/fair.c       — core util_est implementation
+#   kernel/sched/sched.h      — sched_avg structure additions
+#   include/linux/sched.h     — sched_entity additions
+#   kernel/sched/features.h   — SCHED_FEAT_UTIL_EST feature flag
+#
+# Backport notes for 4.19:
+#   - 4.19's sched_avg structure may differ from 5.0's
+#   - WALT (vendor) and PELT can coexist; util_est works with both
+#   - ACK 4.19 kernels may already include util_est (check Kconfig)
+#   - If SCHED_UTIL_EST exists in Kconfig, no backport needed — just enable it
+#
+# Config options:
+#   CONFIG_SCHED_UTIL_EST=y
+#   CONFIG_SCHED_UTIL_EST_FASTUP=y
+#
+# Risk: Low-Medium (scheduler internal API differences)
+# Benefit: Medium (smoother frequency selection, better EAS)

@@ -1,0 +1,976 @@
+# ===================================================================
+# lemonades_c16_extreme.fragment
+# EXTREME config fragment for OnePlus 9R (lemonades / SM8250)
+# Baseline: 4.19 with maximum mainline feature backports
+#
+# This fragment enables ALL backported features plus aggressive tuning.
+# Use ONLY after successfully applying all backport patches.
+#
+# Includes everything from advanced.fragment plus:
+#   - uclamp (5.3 backport) — utilization clamping for EAS
+#   - Aggressive scheduler tuning
+#   - Enhanced memory management
+#   - Network stack modernization
+# ===================================================================
+
+# ===================================================================
+# 内核名称: Oblivionis-kernel
+# CONFIG_LOCALVERSION 会附加到 /proc/version 的内核版本字符串中
+# Android "关于本机" → "内核版本" 读取的就是 /proc/version
+# 显示效果: Linux version 4.19.325-...-Oblivionis-kernel (...)
+# ===================================================================
+CONFIG_LOCALVERSION="-Oblivionis-kernel"
+# CONFIG_LOCALVERSION_AUTO is not set
+
+# ---- PSI: Pressure Stall Information (完整启用) ----
+# 酷安内核普遍启用完整 PSI, 配合 PSI-LMK 实现智能后台回收
+CONFIG_PSI=y
+# 不再默认禁用 PSI, 让启动时即生效 (per-cgroup PSI 也依赖此)
+# CONFIG_PSI_DEFAULT_DISABLED is not set
+
+# ---- uclamp: Utilization Clamping (5.3 backport) ----
+# Critical for Android EAS — allows capping/flooring CPU frequency per-task
+CONFIG_UCLAMP_TASK=y
+CONFIG_UCLAMP_BUCKETS_COUNT=20
+CONFIG_UCLAMP_TASK_GROUP=y
+
+# ---- io_uring (5.1+ backport) ----
+CONFIG_IO_URING=y
+
+# ---- memfd_secret: secret memory areas (5.14 backport) ----
+CONFIG_SECRETMEM=y
+
+# ---- BPF ----
+CONFIG_BPF=y
+CONFIG_BPF_SYSCALL=y
+CONFIG_BPF_JIT=y
+CONFIG_BPF_JIT_ALWAYS_ON=y
+CONFIG_BPF_LSM=y
+# NOTE: BTF disabled in runtime toggles — resolve_btfids issue on CI
+# CONFIG_DEBUG_INFO_BTF is not set
+
+# ---- Aggressive scheduler tuning ----
+CONFIG_PREEMPT=y
+CONFIG_PREEMPT_COUNT=y
+CONFIG_PREEMPT_NOTIFIERS=y
+CONFIG_SCHED_MC=y
+CONFIG_SCHED_SMT=y
+CONFIG_SCHED_TUNE=y
+CONFIG_EAS_COMPILER_SUPPORT=y
+# SCHED_DEBUG/SCHEDSTATS 在每次调度操作时收集统计，拖慢运行且仅用于调试
+# CONFIG_SCHED_DEBUG is not set
+CONFIG_SCHED_INFO=y
+# CONFIG_SCHEDSTATS is not set
+CONFIG_SCHED_HRTICK=y
+CONFIG_SCHED_AUTOGROUP=y
+
+# ---- 帧感知调度优化 (Frame-Aware Scheduling) ----
+# HZ=300 适配 90Hz/120Hz 屏幕，减少帧抖动
+CONFIG_HZ=300
+CONFIG_HZ_300=y
+# NO_HZ_IDLE: 减少空闲 CPU 的定时器中断 (移动端正确选择)
+# 注意: NO_HZ_FULL 面向 HPC/CPU 密集负载，会引入 context-tracking 开销，
+#        在手机交互场景下反而增加延迟、影响续航。手机应使用 NO_HZ_IDLE。
+CONFIG_NO_HZ_COMMON=y
+CONFIG_NO_HZ_IDLE=y
+# CONFIG_NO_HZ_FULL is not set
+# CONFIG_NO_HZ_FULL_ALL is not set
+# 高精度定时器: 更精确的唤醒，降低帧延迟
+CONFIG_HIGH_RES_TIMERS=y
+# RCU 优化: 保护前台任务不被 RCU 回收阻塞
+# RCU_NOCB_CPU 仅在 NO_HZ_FULL 下有意义，NO_HZ_IDLE 不需要
+# CONFIG_RCU_NOCB_CPU is not set
+CONFIG_RCU_BOOST=y
+CONFIG_RCU_BOOST_DELAY=500
+# 负载均衡
+CONFIG_SMP=y
+
+# ---- 内存延迟优化 (Memory Latency / memlat) ----
+# KSM: 合并相同页面，减少内存占用
+CONFIG_KSM=y
+# 减少水印: 更早触发 kswapd，避免直接回收
+CONFIG_ZONE_DMA=y
+# NUMA: 单 SoC 无需 NUMA 开销
+# CONFIG_NUMA is not set
+
+# ---- CPU frequency: schedutil + uclamp integration ----
+CONFIG_CPU_FREQ=y
+CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
+CONFIG_CPU_FREQ_GOV_POWERSAVE=y
+CONFIG_CPU_FREQ_GOV_ONDEMAND=y
+CONFIG_CPU_FREQ_GOV_INTERACTIVE=y
+CONFIG_CPU_FREQ_STAT=y
+CONFIG_CPU_FREQ_TIMES=y
+
+# ---- Energy model for EAS ----
+CONFIG_ENERGY_MODEL=y
+CONFIG_CPU_FREQ_THERMAL=y
+CONFIG_DEVFREQ_THERMAL=y
+
+# ---- 内存管理增强 ----
+CONFIG_MEMCG=y
+CONFIG_MEMCG_SWAP=y
+CONFIG_MEMCG_KMEM=y
+CONFIG_SWAP=y
+
+# ---- ZRAM: 内置 + 多压缩算法 + 重压缩 + 批量写回 ----
+# ZRAM 改为内核内置 (非模块)，开机即用
+CONFIG_ZRAM=y
+# ZRAM 写回: 支持将冷数据写回到后备存储
+CONFIG_ZRAM_WRITEBACK=y
+# ZRAM 内存跟踪 (调试用，生产环境关闭以减少开销)
+# CONFIG_ZRAM_MEMORY_TRACKING is not set
+# ZRAM 多压缩算法支持 (需要 backport 补丁)
+# CONFIG_ZRAM_MULTI_COMP=y
+# ZRAM 默认压缩算法: LZ4KD (最优性能/压缩比平衡)
+# 如果 LZ4KD 不可用则自动回退到 LZ4
+CONFIG_ZRAM_DEF_COMP_LZ4KD=y
+CONFIG_ZRAM_DEF_COMP_LZ4K=y
+CONFIG_ZRAM_LZ4_COMPRESS=y
+# ZRAM 重压缩: 将冷页面用更高压缩比算法重新压缩
+# CONFIG_ZRAM_DEF_RECOMP_ZSTD=y
+# CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
+
+# ---- 压缩算法: LZ4K / LZ4KD / LZ4HC / 842 ----
+CONFIG_CRYPTO_LZ4=y
+CONFIG_CRYPTO_LZ4HC=y
+CONFIG_CRYPTO_LZ4K=y
+CONFIG_CRYPTO_LZ4KD=y
+CONFIG_CRYPTO_842=y
+CONFIG_CRYPTO_ZSTD=y
+CONFIG_CRYPTO_LZO=y
+# LZ4K/LZ4KD 库
+CONFIG_LZ4K_COMPRESS=y
+CONFIG_LZ4K_DECOMPRESS=y
+CONFIG_LZ4KD_COMPRESS=y
+CONFIG_LZ4KD_DECOMPRESS=y
+CONFIG_LZ4HC_COMPRESS=y
+CONFIG_LZ4HC_DECOMPRESS=y
+
+# ---- zsmalloc: 内存分配器 (配合 ZRAM) ----
+CONFIG_ZSMALLOC=y
+# ZSMALLOC_STAT 调试统计，生产环境关闭
+# CONFIG_ZSMALLOC_STAT is not set
+CONFIG_ZPOOL=y
+
+# ---- Zswap: 压缩交换缓存 ----
+CONFIG_ZSWAP=y
+CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4=y
+CONFIG_ZSWAP_ZPOOL_DEFAULT_ZSMALLOC=y
+
+# ---- Block IO: ADIOS 3.2.0 默认 I/O 调度器 ----
+CONFIG_BLK_DEV_THROTTLING=y
+CONFIG_BLK_DEV_THROTTLING_LOW=y
+CONFIG_BLK_WBT=y
+CONFIG_BLK_WBT_MQ=y
+CONFIG_BLK_SED_OPAL=y
+CONFIG_BLK_DEV_ZONED=y
+# ADIOS 3.2.0: 自适应截止时间 I/O 调度器 (默认)
+# 优化延迟模型、优先级调度和异常处理
+# 如果 ADIOS 编译失败，回退到 mq-deadline
+CONFIG_MQ_IOSCHED_ADIOS=y
+CONFIG_MQ_IOSCHED_DEADLINE=y
+CONFIG_MQ_IOSCHED_KYBER=y
+CONFIG_MQ_IOSCHED_BFQ=y
+
+# ---- 内联加密 ----
+CONFIG_BLK_INLINE_ENCRYPTION=y
+CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK=y
+CONFIG_FS_ENCRYPTION=y
+CONFIG_FS_ENCRYPTION_INLINE_CRYPT=y
+CONFIG_DM_DEFAULT_KEY=y
+CONFIG_QCOM_ICE=y
+
+# ---- fs-verity with signatures ----
+CONFIG_FS_VERITY=y
+CONFIG_FS_VERITY_BUILTIN_SIGNATURES=y
+
+# ---- Filesystem: full feature set ----
+CONFIG_F2FS_FS=y
+CONFIG_F2FS_STAT_FS=y
+CONFIG_F2FS_FS_XATTR=y
+CONFIG_F2FS_FS_POSIX_ACL=y
+CONFIG_F2FS_FS_SECURITY=y
+CONFIG_F2FS_FS_ENCRYPTION=y
+CONFIG_F2FS_FS_COMPRESSION=y
+CONFIG_F2FS_FS_LZ4_COMPRESS=y
+CONFIG_F2FS_FS_ZSTD_COMPRESS=y
+CONFIG_EROFS_FS=y
+CONFIG_EROFS_FS_XATTR=y
+CONFIG_EROFS_FS_ZIP=y
+CONFIG_EROFS_FS_LZ4HC=y
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_FS_POSIX_ACL=y
+CONFIG_EXT4_FS_SECURITY=y
+
+# ---- Network: BBRv3 + advanced congestion control ----
+# BBRv1 (4.19 内置): 作为默认 TCP 拥塞控制
+CONFIG_TCP_CONG_BBR=y
+CONFIG_DEFAULT_TCP_CONG="bbr"
+# BBRv3: Google BBR v3 (内置，不替换 BBRv1)
+# 改为内置 (=y): AnyKernel3 boot-only 刷入不安装模块，内置确保功能可用
+# 如果 BBRv3 编译失败，BBRv1 继续作为默认
+CONFIG_TCP_CONG_BBR3=y
+# C2TCP: 蜂窝网络和深缓冲网络低延迟拥塞控制
+CONFIG_TCP_CONG_C2TCP=y
+# TCP ROCCET: 基于 CUBIC + RTT/ACK 速率感知，面向 5G/移动网络/Bufferbloat
+CONFIG_TCP_CONG_ROCCET=y
+# TCP Brutal: Hysteria 速率控制，默认启用 ECN 协商
+CONFIG_TCP_CONG_BRUTAL=y
+# 保留 CUBIC 作为备选
+CONFIG_TCP_CONG_CUBIC=y
+CONFIG_TCP_CONG_WESTWOOD=y
+CONFIG_TCP_CONG_VEGAS=y
+# ECN (Explicit Congestion Notification): 默认启用 ECN 协商
+CONFIG_TCP_ECN=y
+# TCP Fast Open
+CONFIG_TCP_FASTOPEN=y
+CONFIG_TCP_MD5SIG=y
+CONFIG_INET_DIAG=y
+CONFIG_INET_TCP_DIAG=y
+CONFIG_NET_RX_BUSY_POLL=y
+CONFIG_BQL=y
+# QoS 调度器: FQ/FQ-CoDel/CAKE 改善复杂网络场景传输稳定性
+CONFIG_NET_SCH_FQ=y
+CONFIG_NET_SCH_FQ_CODEL=y
+CONFIG_NET_SCH_CAKE=y
+CONFIG_NET_SCH_HTB=y
+CONFIG_NET_SCH_TBF=y
+CONFIG_NET_SCH_PRIO=y
+CONFIG_NET_SCH_CODEL=y
+CONFIG_NET_EMATCH=y
+CONFIG_NET_CLS_ACT=y
+CONFIG_NET_NS=y
+
+# ---- cgroup v2 full set ----
+CONFIG_CGROUPS=y
+CONFIG_CGROUP_V2=y
+CONFIG_CGROUP_FREEZER=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_CGROUP_DEVICE=y
+CONFIG_CGROUP_CPUACCT=y
+CONFIG_CGROUP_PERF=y
+CONFIG_CGROUP_BPF=y
+CONFIG_CGROUP_RDMA=y
+CONFIG_CGROUP_HUGETLB=y
+CONFIG_CPUSETS=y
+CONFIG_CGROUP_SCHEDTUNE=y
+
+# ---- Security hardening (maximum) ----
+CONFIG_STACKPROTECTOR=y
+CONFIG_STACKPROTECTOR_STRONG=y
+CONFIG_FORTIFY_SOURCE=y
+CONFIG_STRICT_KERNEL_RWX=y
+CONFIG_STRICT_MODULE_RWX=y
+CONFIG_STRICT_DEVMEM=y
+CONFIG_HARDENED_USERCOPY=y
+# 关闭 usercopy 回退模式，强化校验 (回退模式会跳过部分校验)
+# CONFIG_HARDENED_USERCOPY_FALLBACK is not set
+CONFIG_REFCOUNT_FULL=y
+CONFIG_SECURITY_DM_VERITY=y
+CONFIG_DM_VERITY=y
+CONFIG_DM_VERITY_FEC=y
+CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG=y
+CONFIG_SECURITY=y
+CONFIG_SECURITY_YAMA=y
+# NOTE: SECURITY_LOADPIN 禁用 — LoadPin 会限制内核只能从 pin 的根文件系统加载模块/固件
+# 自定义内核刷入后，模块可能从不同路径加载，LoadPin 会导致模块/固件加载失败
+# CONFIG_SECURITY_LOADPIN is not set
+CONFIG_SECURITY_SAFESETID=y
+# NOTE: lockdown LSM disabled — DEFINE_EARLY_LSM not available on 4.19
+# CONFIG_SECURITY_LOCKDOWN_LSM is not set
+
+# ---- Module signing (CRITICAL: disabled) ----
+# MODULE_SIG_FORCE 会导致厂商模块无法加载，设备无法开机
+# Android 厂商模块用高通/一加密钥签名，我们的内核用自动生成的密钥
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+# CONFIG_MODULE_SIG is not set
+# CONFIG_MODULE_SIG_FORCE is not set
+# CONFIG_MODULE_SIG_ALL is not set
+
+# ---- DMA-BUF heaps (modern) ----
+CONFIG_DMABUF_HEAPS=y
+CONFIG_DMABUF_HEAPS_SYSTEM=y
+CONFIG_DMABUF_HEAPS_CMA=y
+CONFIG_ION=y
+
+# ---- Thermal management ----
+CONFIG_THERMAL=y
+CONFIG_THERMAL_WRITABLE_TRIPS=y
+CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y
+CONFIG_THERMAL_GOV_STEP_WISE=y
+CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
+CONFIG_CPU_THERMAL=y
+CONFIG_DEVFREQ_THERMAL=y
+CONFIG_CLOCK_THERMAL=y
+
+# ---- Watchdog ----
+CONFIG_WATCHDOG=y
+CONFIG_WATCHDOG_NOWAYOUT=y
+CONFIG_QCOM_WATCHDOG=y
+CONFIG_SOFTLOCKUP_DETECTOR=y
+CONFIG_DETECT_HUNG_TASK=y
+CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=120
+
+# ---- Android vendor hooks (必需) ----
+CONFIG_ANDROID_VENDOR_HOOKS=y
+
+# ---- userfaultfd: 用户态缺页处理 (4.19 原生) ----
+CONFIG_USERFAULTFD=y
+
+# ---- XDP Sockets: AF_XDP 高性能包处理 (4.18+ 原生) ----
+CONFIG_XDP_SOCKETS=y
+# NOTE: XDP_SOCKETS_DIAG 禁用 — 4.19 的 xdp_umem 结构体缺少字段
+# CONFIG_XDP_SOCKETS_DIAG is not set
+
+# ---- WireGuard VPN (android-4.19-stable 已内置) ----
+CONFIG_WIREGUARD=y
+# CONFIG_WIREGUARD_DEBUG is not set
+
+# ---- diag char: 高通诊断字符设备 ----
+# 修复锁频段工具无法正常工作的问题
+CONFIG_DIAG_CHAR=y
+CONFIG_DIAG_OVER_USB=y
+CONFIG_DIAGFWD_BRIDGE_CODE=y
+CONFIG_DIAG_MHI=y
+
+# ---- 调度器增强 (EEVDF 替代方案) ----
+# EEVDF (6.6) 完全替换 CFS，无法 backport 到 4.19
+# 替代: 启用 WALT + schedtune + core_ctl 组合优化
+CONFIG_SCHED_WALT=y
+CONFIG_SCHED_CORE_CTL=y
+
+# ---- 禁用调试膨胀 ----
+# CONFIG_DEBUG_INFO is not set
+# CONFIG_KASAN is not set
+# CONFIG_KCOV is not set
+# CONFIG_DEBUG_KMEMLEAK is not set
+# CONFIG_FTRACE is not set
+
+# ===================================================================
+# 新增特性配置 (v2)
+# ===================================================================
+
+# ---- UKSM: Ultra KSM (增强版 KSM，自动扫描合并) ----
+CONFIG_UKSM=y
+
+# ---- NTSYNC: NT 同步原语驱动 (Wine/Proton 兼容) ----
+# 改为内置: AnyKernel3 boot-only 不安装模块
+CONFIG_NTSYNC=y
+
+# ---- Lindroid EVDI: 虚拟显示接口 ----
+# 改为内置: AnyKernel3 boot-only 不安装模块
+CONFIG_DRM_EVDI=y
+
+# ---- THP: 透明大页 (优化内存管理) ----
+# 注意: 厂商内核的 THP 代码存在 API 不一致问题 (rmap.h/mmu_notifier.h 更新但
+# huge_memory.c/khugepaged.c 未更新)。构建系统会运行 Python 脚本修复这些问题。
+# 如果修复失败，THP 将被自动禁用以确保构建成功。
+CONFIG_TRANSPARENT_HUGEPAGE=y
+CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y
+CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
+CONFIG_THP_SWAP=y
+
+# ---- 内存回收优化 ----
+# 更积极的内存回收策略
+CONFIG_COMPACTION=y
+CONFIG_MIGRATION=y
+CONFIG_KSM=y
+# 水位优化: 更早触发 kswapd 回收
+CONFIG_ZONE_DMA=y
+# 4.19 原生不支持 MGLRU (需要 6.1+)，使用增强 vmscan
+# CONFIG_LRU_GEN is not set
+# CONFIG_LRU_GEN_ENABLED is not set
+
+# ---- F2FS 优化 ----
+CONFIG_F2FS_FS=y
+CONFIG_F2FS_STAT_FS=y
+CONFIG_F2FS_FS_XATTR=y
+CONFIG_F2FS_FS_POSIX_ACL=y
+CONFIG_F2FS_FS_SECURITY=y
+CONFIG_F2FS_FS_ENCRYPTION=y
+CONFIG_F2FS_FS_COMPRESSION=y
+CONFIG_F2FS_FS_LZ4_COMPRESS=y
+CONFIG_F2FS_FS_LZ4HC_COMPRESS=y
+CONFIG_F2FS_FS_ZSTD_COMPRESS=y
+CONFIG_F2FS_FS_LZO_COMPRESS=y
+# F2FS 故障注入 (调试用，默认关闭)
+# CONFIG_F2FS_FAULT_INJECTION is not set
+
+# ---- EROFS 优化 ----
+CONFIG_EROFS_FS=y
+CONFIG_EROFS_FS_XATTR=y
+CONFIG_EROFS_FS_ZIP=y
+CONFIG_EROFS_FS_LZ4HC=y
+CONFIG_EROFS_FS_CLUSTER_LIMIT=y
+
+# ---- 休眠和深度睡眠 (Hibernation / Deep Sleep) ----
+# HIBERNATION (休眠到磁盘) 在手机上无用，徒增攻击面与内核体积
+# PM_AUTOSLEEP 容易引发非预期休眠
+# CONFIG_HIBERNATION is not set
+# CONFIG_HIBERNATE_CALLBACKS is not set
+CONFIG_PM_STD_PARTITION=""
+CONFIG_PM_SLEEP=y
+CONFIG_PM_SLEEP_SMP=y
+# CONFIG_PM_AUTOSLEEP is not set
+CONFIG_PM_WAKELOCKS=y
+CONFIG_PM_WAKELOCKS_LIMIT=100
+CONFIG_PM_WAKELOCKS_GC=y
+# 挂起到内存 (Suspend to RAM) — 手机正常的息屏休眠
+CONFIG_SUSPEND=y
+# 空闲进程 (idle task) 优化
+CONFIG_CPU_IDLE=y
+CONFIG_CPU_IDLE_GOV_LADDER=y
+CONFIG_CPU_IDLE_GOV_MENU=y
+CONFIG_CPU_IDLE_MULTIPLE_DRIVERS=y
+
+# ---- Mountify: 模块挂载支持 (OverlayFS) ----
+CONFIG_OVERLAY_FS=y
+CONFIG_TMPFS_XATTR=y
+
+# ---- IPSet: IP 集合框架 ----
+CONFIG_IP_SET=y
+CONFIG_IP_SET_MAX=256
+CONFIG_NETFILTER_XT_SET=y
+
+# ---- 网络稳定性增强 ----
+# 改善复杂网络及热点共享场景下的传输稳定性
+# 减少大数据包丢失和网速异常波动
+CONFIG_NET_CORE=y
+CONFIG_NET_RX_BUSY_POLL=y
+CONFIG_NET_DEVLINK=y
+# TCP 窗口缩放和缓冲区
+CONFIG_INET=y
+# TCP 低延迟模式
+CONFIG_TCP_CONG_BBR=y
+# 网络命名空间 (容器/热点共享)
+CONFIG_NET_NS=y
+# IPv6 完整支持
+CONFIG_IPV6=y
+CONFIG_IPV6_ROUTER_PREF=y
+CONFIG_IPV6_ROUTE_INFO=y
+CONFIG_IPV6_MULTIPLE_TABLES=y
+CONFIG_IPV6_MIP6=y
+# 连接跟踪
+CONFIG_NF_CONNTRACK=y
+CONFIG_NF_CONNTRACK_EVENTS=y
+CONFIG_NF_CONNTRACK_TIMEOUT=y
+CONFIG_NF_CONNTRACK_TIMESTAMP=y
+# NAT
+CONFIG_NF_NAT=y
+CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
+
+# ---- Android 17 AOSP GSI 兼容性 ----
+# Treble/VNDK 支持 (GSI 启动必需)
+CONFIG_TREBLE_ENABLE=y
+# Binder IPC (Android 核心通信)
+CONFIG_ANDROID=y
+CONFIG_ANDROID_BINDER_IPC=y
+CONFIG_ANDROID_BINDERFS=y
+CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"
+# Android 日志
+CONFIG_ANDROID_LOGGER=y
+# Android timed output / vibrator
+CONFIG_ANDROID_TIMED_OUTPUT=y
+# Android low memory killer
+CONFIG_ANDROID_LOW_MEMORY_KILLER=y
+# Android ram console
+CONFIG_ANDROID_RAM_CONSOLE=y
+# A/B 更新支持
+CONFIG_ANDROID_BOOTLOADER_RESERVED_RAM=y
+# 厂商钩子 (GSI 兼容必需)
+CONFIG_ANDROID_VENDOR_HOOKS=y
+# ashmem (Android 共享内存)
+CONFIG_ASHMEM=y
+# ION 内存分配器
+CONFIG_ION=y
+CONFIG_ION_SYSTEM_HEAP=y
+CONFIG_ION_CMA_HEAP=y
+# debugfs (GSI 调试需要)
+# CONFIG_DEBUG_FS is not set
+# sync_file (显式同步)
+CONFIG_SYNC_FILE=y
+# swiotlb (DMA bounce buffer)
+CONFIG_SWIOTLB=y
+
+# ---- 加密子系统完整性 ----
+CONFIG_CRYPTO=y
+CONFIG_CRYPTO_ENGINE=y
+CONFIG_CRYPTO_HW=y
+CONFIG_CRYPTO_AEAD=y
+CONFIG_CRYPTO_GCM=y
+CONFIG_CRYPTO_CBC=y
+CONFIG_CRYPTO_CTR=y
+CONFIG_CRYPTO_XTS=y
+CONFIG_CRYPTO_HMAC=y
+CONFIG_CRYPTO_SHA256=y
+CONFIG_CRYPTO_SHA512=y
+CONFIG_CRYPTO_AES=y
+CONFIG_CRYPTO_AES_ARM64=y
+CONFIG_CRYPTO_AES_ARM64_CE=y
+CONFIG_CRYPTO_AES_ARM64_CE_CCM=y
+CONFIG_CRYPTO_AES_ARM64_CE_BLK=y
+CONFIG_CRYPTO_GHASH_ARM64_CE=y
+CONFIG_CRYPTO_SHA2_ARM64_CE=y
+CONFIG_CRYPTO_CRC32=y
+CONFIG_CRYPTO_CRC32C=y
+
+# ===================================================================
+# 新增特性配置 (v3) — KFENCE + 调度器增强 + 内存安全
+# ===================================================================
+
+# ---- KFENCE: Kernel Electric-Fence (5.12 backport) ----
+# 近零开销的内存安全检测器，生产环境可用
+# 使用 guard page 检测越界访问、use-after-free、无效释放
+# 仅约 1/KFENCE_SAMPLE_INTERVAL 的分配被保护，开销极低
+# 注意: 需要 5.12 backport 补丁才能编译，否则 olddefconfig 会忽略
+CONFIG_KFENCE=y
+CONFIG_KFENCE_SAMPLE_INTERVAL=100
+CONFIG_KFENCE_NUM_OBJECTS=255
+CONFIG_KFENCE_STRESS_TEST_FAULTS=0
+
+# ---- 调度器增强: util_est (5.0) ----
+# util_est 使用 EWMA 估计任务利用率，改善频率选择和 EAS 调度决策
+# 如果内核源码已包含此选项则启用，否则 olddefconfig 会忽略
+CONFIG_SCHED_UTIL_EST=y
+CONFIG_SCHED_UTIL_EST_FASTUP=y
+
+# ---- 调度器增强: schedutil 反馈修正 ----
+# schedutil governor 使用调度器利用率信号来选择 CPU 频率
+# CONFIG_CPU_FREQ_GOV_SCHEDUTIL 在上方已启用
+# 确保频率更新延迟最小化
+CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+
+# ---- PELT 1ms 窗口 (如果 4.19 内核支持) ----
+# 4.19 的 PELT 窗口固定为 1024us，无法通过 config 修改
+# 如需 1ms 窗口需要修改 PELT_HALF-life 代码 (不建议)
+# 通过 init 脚本的 sched_latency/sched_min_granularity 补偿
+
+# ---- WALT 窗口大小调优 ----
+# WALT (Window Assisted Load Tracking) 是高通 vendor 内核的负载追踪
+# 窗口大小通过 sysfs 在运行时调整 (见 init.oblivionis.rc)
+# 这里仅确保 WALT 相关配置启用
+CONFIG_SCHED_WALT=y
+
+# ---- slab/slub 增强 ----
+# 随机化 slab freelist (安全加固)
+CONFIG_SLAB_FREELIST_RANDOM=y
+CONFIG_SLAB_FREELIST_HARDENED=y
+# 分配时初始化内存 (安全，开销小 ~1-2%)
+CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
+# NOTE: INIT_ON_FREE 有 ~5-10% 性能损耗，生产环境关闭
+# CONFIG_INIT_ON_FREE_DEFAULT_ON is not set
+
+# ---- 页分配器增强 ----
+# 页分配 poison (仅调试，关闭以减少开销)
+# CONFIG_PAGE_POISONING is not set
+
+# ---- NUMA balancing: 单 SoC 禁用 ----
+# CONFIG_NUMA_BALANCING is not set
+
+# ---- RCU 优化 ----
+# RCU_BOOST: 提升被 RCU 阻塞的实时任务优先级
+CONFIG_RCU_BOOST=y
+CONFIG_RCU_BOOST_DELAY=500
+# RCU_NOCB_CPU: 仅在 NO_HZ_FULL 下有意义，NO_HZ_IDLE 不需要
+# CONFIG_RCU_NOCB_CPU is not set
+
+# ---- Futex 优化 ----
+CONFIG_FUTEX=y
+CONFIG_FUTEX_PI=y
+
+# ---- 信号处理优化 ----
+CONFIG_SIGNALFD=y
+CONFIG_TIMERFD=y
+CONFIG_EVENTFD=y
+
+# ---- 进程统计优化 ----
+CONFIG_TASKSTATS=y
+CONFIG_TASK_DELAY_ACCT=y
+CONFIG_TASK_XACCT=y
+CONFIG_TASK_IO_ACCOUNTING=y
+
+# ---- per-CPU 统计 ----
+CONFIG_CPU_FREQ_STAT=y
+CONFIG_CPU_FREQ_TIMES=y
+
+# ===================================================================
+# 功耗与性能优化配置 (v4)
+# ===================================================================
+
+# ---- 工作队列省电模式: 默认开启 ----
+# power_efficient=1 让工作队列倾向于在当前 CPU 执行
+# 减少跨核唤醒，降低空闲功耗
+CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y
+
+# ---- CPU Idle: 多驱动 + menu/ladder governor ----
+# 已在上方配置:
+#   CONFIG_CPU_IDLE=y
+#   CONFIG_CPU_IDLE_GOV_LADDER=y
+#   CONFIG_CPU_IDLE_GOV_MENU=y
+#   CONFIG_CPU_IDLE_MULTIPLE_DRIVERS=y
+
+# ---- QCOM Power Management ----
+# Qualcomm 特有的低功耗模式
+CONFIG_MSM_PM=y
+CONFIG_MSM_IDLE_STATS=y
+CONFIG_MSM_IDLE_STATS_FIRST_BUCKET=6250
+CONFIG_MSM_IDLE_STATS_BUCKET_SCALE=3
+CONFIG_MSM_IDLE_STATS_MAX_BUCKET=10
+CONFIG_MSM_SUSPEND_STATS=y
+
+# ---- Core Control: CPU 热插拔 ----
+# 动态控制 CPU 核心开关，低负载时关闭大核省电
+CONFIG_MSM_CORE_CTL=y
+
+# ---- MSM Run Queue Stats ----
+# 高通运行队列统计，辅助 WALT 调度器决策
+CONFIG_QCOM_RUN_QUEUE_STATS=y
+
+# ---- MSM DCVS (Dynamic Clock and Voltage Scaling) ----
+# 高通动态时钟电压调节
+CONFIG_MSM_DCVS=y
+
+# ---- Bus scaling ----
+# 总线频率缩放 (DDR/LLCC 带宽管理)
+CONFIG_MSM_BUS_SCALING=y
+CONFIG_MSM_BUS_RULES=y
+CONFIG_MSM_BUS_TIMEOUT=y
+CONFIG_MSM_BUSPM_DEV=y
+
+# ---- MSM SPMI (System Power Management Interface) ----
+CONFIG_MSM_SPMI=y
+CONFIG_SPMI_MSM_PMIC_ARB=y
+
+# ---- MSM DMA ----
+CONFIG_MSM_GPI=y
+CONFIG_MSM_QDFDM=y
+CONFIG_QCOM_HIDMA=y
+CONFIG_QCOM_HIDMA_MGMT=y
+
+# ---- Devfreq: 设备频率缩放 ----
+CONFIG_PM_DEVFREQ=y
+CONFIG_DEVFREQ_GOV_PERFORMANCE=y
+CONFIG_DEVFREQ_GOV_POWERSAVE=y
+CONFIG_DEVFREQ_GOV_USERSPACE=y
+CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y
+CONFIG_DEVFREQ_GOV_ADAPTIVE=y
+
+# ---- MSM Adreno DCVS ----
+# GPU 动态时钟电压调节 (Adreno 650)
+CONFIG_MSM_ADRENO_DCVS=y
+CONFIG_DEVFREQ_GOV_QCOM_ADRENO_TZ=y
+
+# ---- MSM thermal mitigation ----
+CONFIG_MSM_THERMAL_LIMIT=y
+
+# ===================================================================
+# 主线 backport 特性配置 (v5) — MGLRU + DAMON + RCU_LAZY + futex
+# ===================================================================
+
+# ---- MGLRU: 多代 LRU 页面回收 (5.18/6.1 backport) ----
+# Google 在 Android 6.1 内核正式采用，大幅改善内存压力下的性能
+# 将页面分为多代，回收时从最老代回收，提高冷热页面判断精度
+# 降低内存扫描与回收的 CPU 时间
+# 注: 需要 backport 补丁，4.19 原生不支持此选项
+CONFIG_LRU_GEN=y
+CONFIG_LRU_GEN_ENABLED=y
+
+# ---- DAMON: 数据访问监控 (5.15 backport) ----
+# 轻量级内存访问模式检测框架
+# DAMON_RECLAIM: 基于访问模式的主动页面回收
+# DAMON_LRU_SORT: 基于访问模式的 LRU 列表排序
+# 注: 需要 backport 补丁
+CONFIG_DAMON=y
+CONFIG_DAMON_RECLAIM=y
+CONFIG_DAMON_LRU_SORT=y
+
+# ---- RCU_LAZY: 懒惰 RCU 回调批处理 (6.6 backport) ----
+# 基于计时器的 RCU 回调批处理，空闲/轻载系统功耗降低 5-10%
+# 注: 需要 backport 补丁
+CONFIG_RCU_LAZY=y
+
+# ---- futex_waitv: 多 futex 同时等待 (5.16 backport) ----
+# 允许同时等待多个 futex，改善跨平台游戏兼容性 (Wine/Proton)
+# 注: 需要 backport 补丁
+CONFIG_FUTEX_WAITV=y
+
+# ===================================================================
+# 移除调试开销 (Tracing Free) — 参考 Eva Kernel
+# ===================================================================
+# 移除 tracing 减少 perf 开销，略微提升性能
+# 注: 如果某些 vendor 模块依赖 tracing 则需要恢复
+# CONFIG_TRACING is not set
+# CONFIG_EVENT_TRACING is not set
+# CONFIG_FTRACE is not set
+
+# ===================================================================
+# 额外调度器优化配置
+# ===================================================================
+
+# ---- SCHED_CORE: 核心调度 (5.14) ----
+# 支持核心级别隔离，安全场景下防 SMT 侧信道
+# 注: 4.19 可能需要 backport
+# CONFIG_SCHED_CORE is not set
+
+# ---- SCHED_DEBUG 关闭 (减少开销) ----
+# 已在上方配置: # CONFIG_SCHED_DEBUG is not set
+
+# ---- HZ 进一步优化 ----
+# 已在上方配置: CONFIG_HZ=300, CONFIG_HZ_300=y
+
+# ---- PREEMPT: 已配置为全抢占 ----
+# CONFIG_PREEMPT=y 已在上方配置
+
+# ===================================================================
+# 额外内存管理优化
+# ===================================================================
+
+# ---- 主动内存碎片整理 (5.16 sysctl) ----
+# 通过 /proc/sys/vm/compaction_proactiveness 控制 (0-100)
+# 运行时在 init.oblivionis.rc 中设置
+
+# ---- 内存压缩改进 ----
+CONFIG_COMPACTION=y
+CONFIG_MIGRATION=y
+# 已在上方配置
+
+# ---- 透明大页交换 ----
+# 已配置: CONFIG_THP_SWAP=y
+
+# ---- per-CPU 页列表优化 ----
+# 通过运行时 /proc/sys/vm/percpu_pagelist_fraction 控制
+
+# ===================================================================
+# 额外网络优化
+# ===================================================================
+
+# ---- page_pool: 网络缓冲池优化 ----
+# 提升网络驱动数据包缓冲区效率
+CONFIG_PAGE_POOL=y
+
+# ---- 网络中断轮询 (NAPI) ----
+CONFIG_NET_RX_NAPI=y
+
+# ---- GRO/GSO 硬件卸载 ----
+CONFIG_INET=y
+CONFIG_NETDEVICES=y
+
+# ---- XDP: 高性能数据路径 ----
+# 已配置: CONFIG_XDP_SOCKETS=y
+
+# ---- TCP 低延迟改进 ----
+CONFIG_TCP_MD5SIG=y
+
+# ===================================================================
+# 额外安全特性
+# ===================================================================
+
+# ---- LSM (Linux Security Module) ----
+CONFIG_SECURITYFS=y
+CONFIG_SECURITY_NETWORK=y
+CONFIG_SECURITY_NETWORK_XFRM=y
+CONFIG_SECURITY_PATH=y
+
+# ---- Hardened Usercopy (已在上方配置) ----
+# CONFIG_HARDENED_USERCOPY=y
+
+# ---- Stack Protector Strong (已在上方配置) ----
+# CONFIG_STACKPROTECTOR_STRONG=y
+
+# ---- Introduce initial zeroing of local variables ----
+# Clang -ftrivial-auto-var-init=zero 已在 build flags 中
+
+# ===================================================================
+# 文件系统增强
+# ===================================================================
+
+# ---- exFAT 支持 (5.7 backport, Android 常用) ----
+CONFIG_EXFAT_FS=y
+CONFIG_EXFAT_DEFAULT_IOCHARSET="utf8"
+
+# ---- NTFS3 支持 (5.15 backport) ----
+# 注: 4.19 原生 NTFS 是旧版驱动，NTFS3 是新的高性能驱动
+# CONFIG_NTFS3_FS is not set
+
+# ---- CIFS/SMB 支持 ----
+CONFIG_CIFS=y
+CONFIG_CIFS_UPCALL=y
+CONFIG_CIFS_XATTR=y
+CONFIG_CIFS_POSIX=y
+
+# ---- NFS 客户端支持 ----
+CONFIG_NFS_FS=y
+CONFIG_NFS_V3=y
+CONFIG_NFS_V4=y
+
+# ---- ISOFS (光盘镜像) ----
+CONFIG_ISO9660_FS=y
+CONFIG_JOLIET=y
+CONFIG_ZISOFS=y
+
+# ---- UDF (通用磁盘格式) ----
+CONFIG_UDF_FS=y
+
+# ===================================================================
+# 酷安社区内核调研移植特性 (v6) — 原创/参考实现
+# 参考酷安/GitHub/XDA 多个自定义内核的更新日志，原创实现
+# 以下特性均为 Oblivionis 内核此前未包含的新增功能
+# ===================================================================
+
+# ---- Btrfs: B-tree 文件系统 (主线原生, 4.19 可用) ----
+# 支持快照、压缩(ZSTD)、子卷、CoW、校验和
+# 酷安多个内核已集成, 用于高级存储管理和数据完整性保护
+CONFIG_BTRFS_FS=y
+CONFIG_BTRFS_FS_POSIX_ACL=y
+# Btrfs 压缩: ZSTD (最佳压缩比/性能平衡)
+CONFIG_BTRFS_FS_RUN_SANITY_TESTS=n
+# Btrfs 校验和: CRC32C (默认, 已在加密子系统启用)
+# Btrfs 空间缓存: v2 (更高效)
+CONFIG_BTRFS_FS_REF_VERIFY=n
+
+# ---- NTFS3: 新版 NTFS 驱动 (5.15 backport, Paragon 开发) ----
+# 比旧版 ntfs-3g 用户态驱动性能更好, 内核态实现
+# 酷安内核常用于外接 U 盘/移动硬盘场景
+# 注: 需要 backport 补丁, 4.19 原生只有旧版 NTFS
+CONFIG_NTFS3_FS=y
+CONFIG_NTFS3_64BIT_CLUSTER=y
+CONFIG_NTFS3_LZX_XPRESS=y
+CONFIG_NTFS3_FS_POSIX_ACL=y
+
+# ---- Landlock LSM: 细粒度文件系统访问控制 (5.13 backport) ----
+# 允许非特权进程自我沙箱化, 无需 root 即可限制文件访问路径
+# 酷安安全向内核常见特性, 增强应用沙箱隔离
+# 注: 需要 backport 补丁, 4.19 不原生支持
+CONFIG_SECURITY_LANDLOCK=y
+
+# ---- PSI: 完整启用 (含 per-cgroup PSI) ----
+# 此前 PSI_DEFAULT_DISABLED=y 导致 PSI 默认关闭
+# 酷安内核普遍启用完整 PSI, 配合 PSI-LMK 实现智能后台回收
+# per-cgroup PSI 允许按 cgroup 追踪 CPU/内存/IO 压力
+CONFIG_PSI=y
+# 取消默认禁用, 让 PSI 在启动时即生效
+# CONFIG_PSI_DEFAULT_DISABLED is not set
+
+# ---- KVM: 内核虚拟机支持 (ARM64) ----
+# 允许在手机上运行虚拟机 (配合 QEMU) 和 Docker 容器
+# 酷安多个内核已集成 KVM+virtio 用于 Docker/Kali Nethunter
+# 注: SM8250 (Cortex-A77) 支持 ARM VHE (Virtualization Host Extensions)
+CONFIG_VIRTUALIZATION=y
+CONFIG_KVM=y
+CONFIG_KVM_ARM_HOST=y
+# virtio 虚拟化驱动框架
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_VHOST_NET=y
+CONFIG_VHOST=y
+
+# ---- DualSense / PlayStation HID: PS5 手柄支持 ----
+# 酷安内核回移植主线 HID playstation 驱动
+# 支持 PS5 DualSense / PS4 DualShock 4 USB 蓝牙连接
+CONFIG_HID_PLAYSTATION=y
+# 通用游戏控制器支持
+CONFIG_HID_GENERIC=y
+CONFIG_INPUT_JOYDEV=y
+CONFIG_INPUT_JOYSTICK=y
+CONFIG_JOYSTICK_XPAD=y
+
+# ---- ZRAM ZSTD 重压缩: 冷页面高压缩比二次压缩 ----
+# 将长时间未访问的冷页面用 ZSTD 重新压缩 (更高压缩比)
+# 在内存紧张时显著增加可用内存
+CONFIG_ZRAM_MULTI_COMP=y
+CONFIG_ZRAM_DEF_RECOMP_ZSTD=y
+CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
+
+# ---- KPROBES / KRETPROBES: 内核探针 (KernelSU 依赖) ----
+# KernelSU 等内核级 root 方案需要 kprobes 支持
+# 酷安现代内核普遍集成 KernelSU, kprobes 是基础依赖
+CONFIG_KPROBES=y
+CONFIG_KRETPROBES=y
+CONFIG_HAVE_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
+
+# ---- Tracepoints (KernelSU/性能分析依赖) ----
+# 注: 此前禁用了 CONFIG_TRACING, 但 KernelSU 和部分性能工具依赖 tracepoints
+# 改为仅启用 tracepoints, 禁用完整 tracing 以减少开销
+CONFIG_TRACEPOINTS=y
+# CONFIG_TRACING is not set  # 保持禁用以减少开销
+
+# ---- BPF 安全: 禁止非特权用户使用 BPF ----
+# 防止非特权应用通过 BPF 获取内核信息或进行攻击
+CONFIG_BPF_UNPRIV_DEFAULT_OFF=y
+
+# ---- procfs 访问控制: 限制非特权进程访问敏感信息 ----
+# 防止非特权应用读取 /proc/<pid>/fdinfo 等敏感目录
+CONFIG_PROC_FD_NO_RESOLVE=y
+
+# ---- Cgroup v2 增强: 内存/IO 控制器 ----
+# 配合 Docker/容器使用, 提供更细粒度的资源隔离
+CONFIG_CGROUP_WRITEBACK=y
+CONFIG_BLK_CGROUP=y
+CONFIG_BLK_CGROUP_RWSTAT=y
+CONFIG_CGROUP_IO_THROTTLE=y
+
+# ---- 异步设备挂起: 加速休眠/唤醒 ----
+# 允许设备在挂起过程中异步完成操作, 减少整体挂起延迟
+# 酷安省电向内核常见优化
+CONFIG_PM_ASYNC_SUSPEND=y
+
+# ---- F2FS 额外特性 ----
+# F2FS 原子写入 (数据库场景)
+CONFIG_F2FS_FS_ATOMIC_WRITE=y
+
+# ---- OverlayFS: 增强 (配合 KernelSU/Magisk 模块) ----
+# 已启用 CONFIG_OVERLAY_FS, 增加重定向支持
+CONFIG_OVERLAY_FS_REDIRECT_DIR=y
+CONFIG_OVERLAY_FS_INDEX=y
+
+# ---- 块设备: 请求合并优化 ----
+CONFIG_BLK_DEV_INITRD=y
+# BLK_DEV_THROTTLING 已在上方启用
+
+# ---- 网络增强: TCP Advanced Congestion Control 框架 ----
+# 已启用多种 TCP CC, 增加 BBR 内部参数可调性
+CONFIG_TCP_CONG_ADVANCED=y
+
+# ---- 内存管理: 主动碎片整理 (5.16 backport) ----
+# 通过 /proc/sys/vm/compaction_proactiveness 控制
+# 已在 init 脚本中运行时设置
+CONFIG_COMPACTION=y
+
+# ---- 内核调试信息: 仅保留最小集 ----
+# CONFIG_DEBUG_INFO 已禁用 (减少体积)
+# 保留 CONFIG_DEBUG_FS=n (已禁用, 减少攻击面)
+
+# ---- 输入设备: 触控笔/手写笔支持 ----
+CONFIG_INPUT_TABLET=y
+CONFIG_INPUT_TOUCHSCREEN=y
+
+# ---- LED 支持: 通知灯/呼吸灯控制 ----
+CONFIG_LEDS_CLASS=y
+CONFIG_LEDS_TRIGGERS=y
+CONFIG_LEDS_TRIGGER_TIMER=y
+CONFIG_LEDS_TRIGGER_HEARTBEAT=y
+
+# ---- USB: 增强 USB 功能 ----
+CONFIG_USB=y
+CONFIG_USB_SUPPORT=y
+CONFIG_USB_GADGET=y
+CONFIG_USB_CONFIGFS=y
+
+# ---- 音频: 24bit 高解析度播放支持 ----
+# 酷安内核常见特性, 支持高解析度音频输出
+CONFIG_SND=y
+CONFIG_SND_USB_AUDIO=y
+
+# ---- 蓝牙: 增强蓝牙协议支持 ----
+CONFIG_BT=y
+CONFIG_BT_RFCOMM=y
+CONFIG_BT_HIDP=y
+CONFIG_BT_HCISOC=y

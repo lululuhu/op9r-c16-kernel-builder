@@ -1,0 +1,29 @@
+# zram 6.6 多压缩流 backport 补丁系列
+# 按 4.19/5.10 基线适配后的应用顺序
+#
+# 注意: 这些补丁需要从主线 kernel 仓库生成
+# 使用 generate-patches.sh 自动从 git 生成
+#
+# 1. 基础准备: zcomp 结构体改为数组
+01-zram-preparation-multi-zcomp.patch
+
+# 2. 新增 recomp_algorithm sysfs 接口
+02-zram-recomp-algorithm-sysfs.patch
+
+# 3. 重构 WB/非 WB 读路径 (为重压缩做准备)
+03-zram-factor-out-wb-read.patch
+
+# 4. 新增 recompress sysfs 接口 (核心功能)
+04-zram-recompress-sysfs.patch
+
+# 5. Kconfig 添加重压缩算法选择
+05-zram-kconfig-recomp-choice.patch
+
+# 6. block_state 添加 recompress 标志
+06-zram-recompress-block-state.patch
+
+# 7. 文档更新
+07-zram-recompress-docs.patch
+
+# 8. 拼写修正
+08-zram-typos.patch

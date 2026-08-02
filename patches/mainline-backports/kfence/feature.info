@@ -1,0 +1,32 @@
+# KFENCE: Kernel Electric-Fence
+# Mainline version: 5.12
+# Commit: 0ce20dd84089 ("kfence: infrastructure to systematically detect memory safety bugs")
+#
+# KFENCE is a memory safety error detector for the Linux kernel.
+# It uses guard pages to detect out-of-bounds accesses, use-after-free,
+# invalid frees, and memory corruption.
+#
+# Unlike KASAN, KFENCE has near-zero runtime overhead (only ~1 in
+# KFENCE_SAMPLE_INTERVAL allocations are guarded), making it suitable
+# for production use.
+#
+# Source files (new):
+#   mm/kfence/            — core implementation
+#   include/linux/kfence.h — public API
+#   arch/arm64/include/asm/kfence.h — arm64 arch support
+#   lib/test_kfence.c     — self-tests
+#
+# Backport notes for 4.19:
+#   - Requires SLAB/SLUB allocator hooks (4.19 has different API)
+#   - arch/arm64 kfence support needs pgtable handling changes
+#   - Documentation files skipped (not needed for compilation)
+#   - Some debugfs/locking APIs differ between 4.19 and 5.12
+#
+# Config options:
+#   CONFIG_KFENCE=y
+#   CONFIG_KFENCE_SAMPLE_INTERVAL=100
+#   CONFIG_KFENCE_NUM_OBJECTS=255
+#   CONFIG_KFENCE_STRESS_TEST_FAULTS=0
+#
+# Risk: Medium-High (allocator API differences)
+# Benefit: High (catches memory safety bugs with near-zero overhead)

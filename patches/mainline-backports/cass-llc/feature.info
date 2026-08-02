@@ -1,0 +1,79 @@
+# CASS (Cluster Aware Superset Scheduler) — LLC 缓存亲和性优化
+#
+# 特性: 优化 CASS 中的 LLC 缓存亲和性选核逻辑
+# 来源: 厂商定制 (QCOM/Android vendor kernel)
+# 主线状态: 不在主线中
+#
+# ===================================================================
+# 背景知识
+# ===================================================================
+#
+# CASS (Cluster Aware Superset Scheduler) 是 QCOM/Android 在 4.19
+# vendor kernel 中实现的增强调度器，基于 WALT + EAS 框架。
+#
+# SM8250 (Kona / 骁龙870) 的 CPU 拓扑:
+#   - Prime cluster: CPU7 (Cortex-A77 @ 2.84GHz)
+#   - Gold cluster:  CPU4-6 (Cortex-A77 @ 2.42GHz)
+#   - Silver cluster: CPU0-3 (Cortex-A55 @ 1.80GHz)
+#
+# 所有核心在同一个 DSU 中，共享 L3 缓存 (LLC)。
+#
+# ===================================================================
+# 当前问题
+# ===================================================================
+#
+# 1. LLC 缓存亲和性选核逻辑不足
+#    - select_idle_sibling() 未充分利用 LLC domain
+#    - 任务从 gold 迁移到 prime 时可能丢失 L3 缓存
+#    - 应优先选择同 LLC 的空闲 CPU
+#
+# 2. 锥形 DVFS headroom 依赖 CPU 容量
+#    - 当前: headroom = capacity_diff * factor
+#    - 问题: prime 和 gold 容量差异大，headroom 计算不准确
+#    - 修正: 改为基于频率差的固定 headroom (更保守)
+#
+# 3. CPUSet 调整由 userspace 控制
+#    - 当前: libperfmgr 或 similar 控制_cpuset
+#    - 问题: userspace 响应慢，无法快速适配负载变化
+#    - 修正: 内核接管 CPUSet 调整，为 CASS 优化
+#
+# ===================================================================
+# 实施计划
+# ===================================================================
+#
+# Phase 1: LLC 缓存亲和性选核优化
+#   - 修改 kernel/sched/fair.c 中的 select_idle_sibling()
+#   - 添加 LLC domain 感知的空闲 CPU 搜索
+#   - 利用 cpu_llc_id 判断共享 LLC
+#
+# Phase 2: DVFS headroom 修正
+#   - 修改 kernel/sched/fair.c 中的 compute_energy()
+#   - 替换 capacity-based headroom 为 frequency-based
+#   - 添加 sysctl 控制 headroom 大小
+#
+# Phase 3: 内核接管 CPUSet
+#   - 新增 kernel/sched/cpuset_cass.c
+#   - 根据 WALT 负载自动调整 _cpuset
+#   - 前台任务优先放置在 prime/gold 集群
+#   - 后台任务限制在 silver 集群
+#
+# ===================================================================
+# 依赖
+# ===================================================================
+#
+# - CONFIG_SCHED_WALT=y (已启用)
+# - CONFIG_SCHED_TUNE=y (已启用)
+# - CONFIG_ENERGY_MODEL=y (已启用)
+# - CONFIG_ANDROID_VENDOR_HOOKS=y (已启用)
+#
+# ===================================================================
+# 风险
+# ===================================================================
+#
+# - 4.19 vendor kernel 的 sched/fair.c 已被 QCOM 大量修改
+# - 需要仔细分析现有代码，避免冲突
+# - CASS 相关代码可能在 vendor/private 目录中
+#   (不在 LineageOS 公开源码中)
+#
+# 注意: 需要检查 LineageOS SM8250 kernel 是否包含 CASS 代码。
+#       如果不包含，需要从 QCOM BSP 补充，但这可能涉及授权问题。

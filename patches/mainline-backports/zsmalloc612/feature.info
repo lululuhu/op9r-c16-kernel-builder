@@ -1,0 +1,53 @@
+# zsmalloc 6.12 backport — 主线 commit 参考
+#
+# 特性: zsmalloc 锁优化 + zpdesc 内存描述符抽象
+# 主线版本: 6.12
+# 作者: Chengming Zhou (锁优化), Alex Shi/Hyeonggon Yoo (zpdesc)
+#
+# 核心变更 (3 个部分，可独立 backport):
+#
+# === 部分 A: per-size_class lock 回归 (推荐, 低风险) ===
+# 作者: Chengming Zhou
+# LWN: https://lwn.net/Articles/979287/
+#
+# 背景: commit c0547d0b6a4b 将 zs_pool 的 migrate_lock 和 size_class 的锁
+# 合并为 pool spinlock (为 zsmalloc reclaim 准备)，但 zsmalloc reclaim
+# 被取消后该锁变更仍保留，导致 pool spinlock 扩展性差。
+#
+# 变更: 恢复为 per-size_class locking，改善 zswap 单 pool 场景性能。
+# 性能: sys 时间从 1844s 降至 1469s (tmpfs + zswap + 10GB swapfile)
+#
+# 受影响文件: mm/zsmalloc.c
+# 补丁数: ~3-5 个
+# backport 难度: 简单-中等
+# backport 价值: 高 (性能改善明显)
+#
+# === 部分 B: zpdesc 内存描述符抽象 (高风险, 实验性) ===
+# 作者: Alex Shi, Hyeonggon Yoo
+# LKML: https://lkml.iu.edu/2409.0/00622.html
+#
+# 变更: 用 8 字节 zpdesc 描述符替代直接使用 struct page
+# 受影响文件: mm/zsmalloc.c, mm/zpdesc.h (新增), include/linux/zsmalloc.h
+# 补丁数: 21 个
+# backport 难度: 困难 (需新增 mm/zpdesc.h，大量函数签名变更)
+# backport 价值: 中 (为未来 mm/ 演进做准备，当前功能不变)
+# 注意: 仅建议在 5.10 基线上尝试，4.19 基线不推荐
+#
+# === 部分 C: proper page type (中等风险) ===
+# 作者: David Hildenbrand
+# LWN: https://lwn.net/Articles/974713/
+#
+# 变更: zsmalloc 使用 proper page type 标识页面
+# 受影响文件: mm/zsmalloc.c, include/linux/mm_types.h, include/linux/page-flags.h
+# 补丁数: ~5 个
+# backport 难度: 中等 (需修改 page-flags.h，可能与 QCOM 补丁冲突)
+# backport 价值: 低 (主要是代码清理，无功能改善)
+# 限制: 不再支持 PAGE_SIZE > 64KB
+#
+# === 推荐策略 ===
+# 仅 backport 部分 A (per-size_class lock)，这是最高性价比的改进
+# 部分 B 和 C 仅在有充分测试时间时考虑
+#
+# === zs_map_object API 废弃 (未进入 6.12, 仅 RFC) ===
+# Sergey Senozhatsky 提出的 zs_map_handle/zs_unmap_handle 新 API
+# 仍为 RFC 状态，6.12 中未正式合入，不需 backport

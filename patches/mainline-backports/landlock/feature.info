@@ -1,0 +1,6 @@
+name: Landlock LSM
+description: Fine-grained filesystem access control security module
+source_version: 5.13
+target_version: 4.19
+author: Mickaël Salaün
+status: experimental

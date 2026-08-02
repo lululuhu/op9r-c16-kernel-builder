@@ -1,0 +1,694 @@
+# =============================================================================
+# init.oblivionis.rc — Oblivionis-kernel 运行时调参
+# 通过 AnyKernel3 ramdisk 注入到 boot.img，开机时由 init 执行
+# =============================================================================
+# 所有参数都经过针对 OnePlus 9R (SM8250, 8/12GB RAM) 的调优
+# 如需恢复默认值，删除对应行即可
+#
+# 结构说明:
+#   on post-fs-data — 早期 I/O、存储、ZRAM、KSM/UKSM 配置
+#   on boot         — VM、调度器、CPU、网络、触控加速
+#   exec (post-fs-data) — 需要条件判断的操作 (KSM/UKSM 选择、ZRAM 算法回退)
+# =============================================================================
+
+# =============================================================================
+# post-fs-data: 早期配置 (在 vendor ZRAM 初始化之前执行)
+# =============================================================================
+on post-fs-data
+    # ---- I/O 调度器: 优先 ADIOS (自适应截止时间)，回退 mq-deadline ----
+    # ADIOS 3.2.0 对 UFS 闪存提供更优的延迟模型和优先级调度
+    # 使用 exec 条件判断: ADIOS 可用时设为默认，否则回退到 mq-deadline
+    exec - root root -- /system/bin/sh -c "echo adios > /sys/block/sda/queue/scheduler 2>/dev/null || echo mq-deadline > /sys/block/sda/queue/scheduler 2>/dev/null"
+    # 读取预读 (KB): 128KB 适合 UFS 随机读取模式
+    #   不宜设 256: 过大预读会浪费内存和 IO 带宽 (UFS 随机读取为主)
+    write /sys/block/sda/queue/read_ahead_kb 128 2>/dev/null
+    # 随机读取预回填 (0=禁用，移动端通常禁用)
+    write /sys/block/sda/queue/read_rnd_ahead_kb 0 2>/dev/null
+    # 请求队列深度
+    write /sys/block/sda/queue/nr_requests 256 2>/dev/null
+    # 标记为非旋转设备 (SSD/UFS)
+    write /sys/block/sda/queue/rotational 0 2>/dev/null
+    # I/O 统计 (0=禁用减少开销)
+    write /sys/block/sda/queue/iostats 0 2>/dev/null
+    # 附加随机性 (0=禁用，SSD/UFS 不需要)
+    write /sys/block/sda/queue/add_random 0 2>/dev/null
+    # I/O 轮询 (0=禁用，移动端通常禁用)
+    write /sys/block/sda/queue/io_poll 0 2>/dev/null
+    # I/O 超时 (ms): 30 秒 (统一值，避免冲突)
+    write /sys/block/sda/queue/io_timeout 30000 2>/dev/null
+
+    # ---- ZRAM: 压缩算法 (通过下方 exec 条件设置，此处无需 write) ----
+    # comp_algorithm 只能在 ZRAM 未激活时设置
+    # 内核配置 CONFIG_ZRAM_DEF_COMP_LZ4KD=y 已设置默认算法
+    # exec 命令会检查可用算法并选择最优 (lz4kd > lz4 > lzo)
+
+    # ---- ZRAM: 最大压缩流数 (匹配 CPU 核心数，并行压缩) ----
+    # SM8250 有 8 核心，设 8 可充分利用多核并行压缩
+    write /sys/block/zram0/max_comp_streams 8 2>/dev/null
+
+    # ---- 触发初始内存碎片整理 (减少长期运行的碎片化) ----
+    write /proc/sys/vm/compact_memory 1 2>/dev/null
+
+    # ---- KSM/UKSM 条件配置 (需要 shell 条件判断) ----
+    # 优先 UKSM (更高效的页面合并)，不可用时回退到原生 KSM
+    # init.rc 的 write 不支持条件判断，使用 exec 在 init 上下文执行 shell
+    exec - root root -- /system/bin/sh -c "if [ -e /sys/kernel/mm/uksm/run ]; then echo 0 > /sys/kernel/mm/ksm/run 2>/dev/null; echo 1 > /sys/kernel/mm/uksm/run 2>/dev/null; else echo 1 > /sys/kernel/mm/ksm/run 2>/dev/null; echo 200 > /sys/kernel/mm/ksm/pages_to_scan 2>/dev/null; echo 5000 > /sys/kernel/mm/ksm/sleep_millisecs 2>/dev/null; fi"
+
+    # ---- ZRAM comp_algorithm 条件回退 ----
+    # 优先 lz4kd (最优性能)，不可用时回退到 lz4
+    # 使用 || 实现 fallback，避免复杂的条件判断和引号转义
+    exec - root root -- /system/bin/sh -c "echo lz4kd > /sys/block/zram0/comp_algorithm 2>/dev/null || echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null"
+
+# =============================================================================
+# boot: 主要运行时调优
+# =============================================================================
+on boot
+    # =====================================================================
+    # VM 内存管理
+    # =====================================================================
+
+    # ---- VM 水位调优: 更早触发 kswapd 回收，减少直接回收导致的卡顿 ----
+    # watermark_scale_factor: 水位间距因子 (默认 10)
+    #   设 60: kswapd 在空闲内存降至 WM_HIGH - 60%*(WM_HIGH-WM_MIN) 时启动
+    #   不宜过高: 125 会导致 kswapd 几乎持续运行，严重耗电和 CPU 占用
+    write /proc/sys/vm/watermark_scale_factor 60
+    # min_free_kbytes: 最低空闲内存 (SM8250 8GB 设 32768=32MB)
+    #   不宜过高: 65536 会浪费 64MB 内存且增加直接回收频率
+    write /proc/sys/vm/min_free_kbytes 32768
+
+    # ---- extra_free_kbytes: 额外保留空闲内存 (长期运行关键参数) ----
+    # 在 min_free_kbytes 基础上额外保留的空闲内存
+    # 设 16384=16MB: 为文件缓存保留更多空间，减少长期运行后的缓存抖动
+    # 不设此值时，长时间运行后文件缓存会被反复回收重建，导致卡顿
+    write /proc/sys/vm/extra_free_kbytes 16384 2>/dev/null
+
+    # ---- Dirty ratio 调优: 减少写回突发导致的 IO 卡顿 ----
+    write /proc/sys/vm/dirty_ratio 15
+    write /proc/sys/vm/dirty_background_ratio 5
+    write /proc/sys/vm/dirty_expire_centisecs 1500
+    write /proc/sys/vm/dirty_writeback_centisecs 250
+
+    # ---- Swappiness: ZRAM 场景适度调高 (默认 60，设 80) ----
+    #   不宜设 100: 100 会导致内核总是优先压缩页面而非保留文件缓存
+    write /proc/sys/vm/swappiness 80
+
+    # ---- VFS cache 压力: 适度加快 dentry/inode 回收 (默认 100) ----
+    write /proc/sys/vm/vfs_cache_pressure 110
+
+    # ---- Overcommit: 移动端设为 1 (总是允许，避免 OOM 杀进程) ----
+    write /proc/sys/vm/overcommit_memory 1
+
+    # ---- 页迁移开销: 禁用 NUMA balancing (单 SoC 无需) ----
+    write /proc/sys/kernel/numa_balancing 0
+
+    # ---- 内存回收: OOM 行为 ----
+    # oom_kill_allocating_task: OOM 时优先杀死申请内存的任务 (1=是)
+    write /proc/sys/vm/oom_kill_allocating_task 1
+    # panic_on_oom: OOM 时不 panic (0=禁用，让 oom-killer 处理)
+    write /proc/sys/vm/panic_on_oom 0
+
+    # ---- 文件系统: 减少 stat 系统调用开销 ----
+    write /proc/sys/vm/max_map_count 262144
+    write /proc/sys/user/max_user_namespaces 16384 2>/dev/null
+
+    # ---- percpu_pagelist_fraction: 每 CPU 页列表比例 (长期运行优化) ----
+    # 设为 0 使用默认值 (自动管理)，避免高阶分配饥饿
+    # 注: 仅在碎片严重时考虑设非零值
+    # write /proc/sys/vm/percpu_pagelist_fraction 0
+
+    # =====================================================================
+    # 内核调度器调优
+    # =====================================================================
+
+    # ---- CFS 调度参数 ----
+    # sched_latency_ns: 调度延迟 (默认 6000000=6ms，设 5000000=5ms)
+    write /proc/sys/kernel/sched_latency_ns 5000000
+    # sched_min_granularity_ns: 最小运行粒度 (默认 4000000=4ms，设 2000000=2ms)
+    write /proc/sys/kernel/sched_min_granularity_ns 2000000
+    # sched_wakeup_granularity_ns: 唤醒粒度 (默认 4000000=4ms，设 1000000=1ms)
+    write /proc/sys/kernel/sched_wakeup_granularity_ns 1000000
+    # sched_migration_cost_ns: 迁移开销 (默认 500000=0.5ms，降低减少不必要迁移)
+    write /proc/sys/kernel/sched_migration_cost_ns 250000
+    # sched_child_runs_first: 子进程优先运行 (0=禁用，让父进程继续运行)
+    write /proc/sys/kernel/sched_child_runs_first 0
+    # sched_rt_period_us: RT 调度周期 (默认 1000000=1秒)
+    write /proc/sys/kernel/sched_rt_period_us 1000000
+    # sched_rt_runtime_us: RT 运行时间配额 (默认 950000=95%，保留 5% 给普通任务)
+    write /proc/sys/kernel/sched_rt_runtime_us 950000
+
+    # ---- CFS bandwidth control: 提升前台任务的时间配额 ----
+    # sched_cfs_bandwidth_slice_us: CFS 带宽切片 (默认 5000=5ms，设 3000=3ms)
+    write /proc/sys/kernel/sched_cfs_bandwidth_slice_us 3000 2>/dev/null
+
+    # ---- WALT 调度器参数 (OnePlus vendor 内核) ----
+    # sched_window_stats_policy:
+    #   0 = 只看当前窗口 (最响应，适合 90Hz/120Hz)
+    #   1 = 累积窗口 (最平滑)
+    #   2 = 指数平均 (平衡)
+    write /proc/sys/kernel/sched_window_stats_policy 0 2>/dev/null
+    # sched_ravg_hist_size: 历史窗口数量 (默认 5，设 3 减少历史权重，更快响应负载变化)
+    write /proc/sys/kernel/sched_ravg_hist_size 3 2>/dev/null
+    # sched_group_up: 上迁移阈值 (负载超过此值时迁移到大核)
+    write /proc/sys/kernel/sched_group_up 1 2>/dev/null
+    # sched_group_down: 下迁移阈值 (负载低于此值时迁移到小核)
+    write /proc/sys/kernel/sched_group_down 1 2>/dev/null
+    # sched_freq_aggregate_threshold: 频率聚合阈值
+    write /proc/sys/kernel/sched_freq_aggregate_threshold 1 2>/dev/null
+    # sched_sync_hint_enable: 同步唤醒提示 (1=启用，减少跨核迁移)
+    write /proc/sys/kernel/sched_sync_hint_enable 1 2>/dev/null
+    # sched_asym_cap_sibling_packing: 非对称能力 CPU 打包 (1=启用)
+    write /proc/sys/kernel/sched_asym_cap_sibling_packing 1 2>/dev/null
+
+    # =====================================================================
+    # 触控加速 (Touch Boost) — OnePlus vendor 内核
+    # =====================================================================
+
+    # sched_boost: 调度器全局 boost (0=关闭，让 per-cluster boost 工作)
+    write /sys/devices/system/cpu/cpu_boost/sched_boost 0 2>/dev/null
+
+    # boost_input_events: 启用触摸事件 CPU boost
+    write /sys/devices/system/cpu/cpu_boost/parameters/boost_input_events 1 2>/dev/null
+
+    # Silver cluster boost (cpu0-3): 触摸时提升到 1.8GHz
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_boost_freq_khz_cpu0 1800000 2>/dev/null
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_boost_freq_khz_cpu1 1800000 2>/dev/null
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_boost_freq_khz_cpu2 1800000 2>/dev/null
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_boost_freq_khz_cpu3 1800000 2>/dev/null
+
+    # Gold cluster boost (cpu4-6): 触摸时提升到 2.4GHz
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_boost_freq_khz_cpu4 2400000 2>/dev/null
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_boost_freq_khz_cpu5 2400000 2>/dev/null
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_boost_freq_khz_cpu6 2400000 2>/dev/null
+
+    # Prime core boost (cpu7): 触摸时提升到 2.8GHz
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_boost_freq_khz_cpu7 2800000 2>/dev/null
+
+    # Boost 持续时间 (ms): 触摸后保持 boost 的时间
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_boost_duration 40 2>/dev/null
+
+    # Wakeup boost: 唤醒时提升 CPU 频率
+    write /sys/devices/system/cpu/cpu_boost/parameters/sched_wakeup_boost 1 2>/dev/null
+
+    # =====================================================================
+    # CPU 频率优化 (Per-Cluster)
+    # =====================================================================
+
+    # Silver cluster (cpu0-3, Kryo 585 Silver, max ~1.8GHz)
+    write /sys/devices/system/cpu/cpufreq/policy0/scaling_governor schedutil 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 300000 2>/dev/null
+
+    # Gold cluster (cpu4-6, Kryo 585 Gold, max ~2.42GHz)
+    write /sys/devices/system/cpu/cpufreq/policy4/scaling_governor schedutil 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq 300000 2>/dev/null
+
+    # Prime core (cpu7, Kryo 585 Prime, max ~2.84GHz)
+    write /sys/devices/system/cpu/cpufreq/policy7/scaling_governor schedutil 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq 300000 2>/dev/null
+
+    # ---- schedutil 速率限制 ----
+    # up_rate_limit_us: 升频速率限制 (500us = 快速升频响应触摸)
+    # down_rate_limit_us: 降频速率限制 (2000us = 延迟降频保持流畅)
+    write /sys/devices/system/cpu/cpufreq/policy0/schedutil/up_rate_limit_us 500 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy0/schedutil/down_rate_limit_us 2000 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy4/schedutil/up_rate_limit_us 500 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy4/schedutil/down_rate_limit_us 2000 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy7/schedutil/up_rate_limit_us 500 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy7/schedutil/down_rate_limit_us 2000 2>/dev/null
+
+    # =====================================================================
+    # 能效偏好与热管理
+    # =====================================================================
+
+    # Energy performance preference (EPP): 128 = balance
+    write /sys/devices/system/cpu/cpufreq/policy0/energy_performance_preference 128 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy4/energy_performance_preference 128 2>/dev/null
+    write /sys/devices/system/cpu/cpufreq/policy7/energy_performance_preference 128 2>/dev/null
+
+    # CPU idle governor: menu (性能优先)
+    write /sys/devices/system/cpu/cpuidle/governor menu 2>/dev/null
+
+    # 热缓解: 允许更高的温度阈值 (减少过早降频)
+    write /sys/class/thermal/thermal_message/sconfig 13 2>/dev/null
+
+    # =====================================================================
+    # 网络优化
+    # =====================================================================
+
+    # ---- TCP buffer autotuning: 提升大文件下载速度 ----
+    write /proc/sys/net/ipv4/tcp_rmem "4096 87380 67108864"
+    write /proc/sys/net/ipv4/tcp_wmem "4096 65536 67108864"
+    write /proc/sys/net/ipv4/tcp_window_scaling 1
+    write /proc/sys/net/ipv4/tcp_fastopen 3
+    write /proc/sys/net/ipv4/tcp_mtu_probing 1
+    write /proc/sys/net/ipv4/tcp_keepalive_time 600
+    write /proc/sys/net/ipv4/tcp_keepalive_intvl 30
+    write /proc/sys/net/ipv4/tcp_keepalive_probes 5
+    write /proc/sys/net/ipv4/tcp_syncookies 1
+
+    # ---- 连接跟踪表大小 ----
+    write /proc/sys/net/netfilter/nf_conntrack_max 262144 2>/dev/null
+    # NOTE: nf_conntrack_buckets 是只读的 (仅在模块加载时可设)
+    write /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established 1800 2>/dev/null
+    write /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_time_wait 30 2>/dev/null
+
+    # ---- 网络缓冲区 ----
+    write /proc/sys/net/core/rmem_max 67108864 2>/dev/null
+    write /proc/sys/net/core/wmem_max 67108864 2>/dev/null
+    write /proc/sys/net/core/rmem_default 262144 2>/dev/null
+    write /proc/sys/net/core/wmem_default 262144 2>/dev/null
+    write /proc/sys/net/core/netdev_max_backlog 5000 2>/dev/null
+    write /proc/sys/net/core/somaxconn 4096 2>/dev/null
+
+    # ---- 默认 QoS 调度器 ----
+    write /proc/sys/net/core/default_qdisc fq_codel 2>/dev/null
+
+    # =====================================================================
+    # 透明大页 (THP) 与内存整理
+    # =====================================================================
+
+    # defrag: madvise (仅对明确请求的应用启用，避免全局碎片整理开销)
+    write /sys/kernel/mm/transparent_hugepage/defrag madvise 2>/dev/null
+    # khugepaged 扫描间隔 (默认 10000=10秒，设 5000=5秒)
+    write /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_millisecs 5000 2>/dev/null
+    # khugepaged 每次扫描页数
+    write /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan 200 2>/dev/null
+
+    # =====================================================================
+    # Zswap: 压缩交换缓存
+    # =====================================================================
+
+    write /sys/module/zswap/parameters/zswap_max_pool_percent 30 2>/dev/null
+    write /sys/module/zswap/parameters/zswap_compressor lz4 2>/dev/null
+    write /sys/module/zswap/parameters/zswap_zpool zsmalloc 2>/dev/null
+    write /sys/module/zswap/parameters/zswap_enabled 1 2>/dev/null
+
+    # =====================================================================
+    # 内核 watchdog: 降低检测频率减少开销
+    # =====================================================================
+
+    # watchdog_thresh: 看门狗阈值 (默认 10秒，设 15 减少误报)
+    write /proc/sys/kernel/watchdog_thresh 15
+    # nmi_watchdog: NMI 看门狗 (0=禁用，减少开销)
+    write /proc/sys/kernel/nmi_watchdog 0
+
+    # =====================================================================
+    # 熵池优化 (长期运行稳定性)
+    # =====================================================================
+
+    # random.write_wakeup_threshold: 熵池写入唤醒阈值
+    # 默认值在高负载时可能导致熵不足，设为 256 确保有足够熵可用
+    write /proc/sys/kernel/random/write_wakeup_threshold 256 2>/dev/null
+    # random.read_wakeup_threshold: 熵池读取唤醒阈值
+    write /proc/sys/kernel/random/read_wakeup_threshold 128 2>/dev/null
+
+    # =====================================================================
+    # GPU 频率优化 (功耗 + 性能)
+    # =====================================================================
+
+    # GPU governor: msm-adreno-tz (Adreno 默认，平衡性能与功耗)
+    # 游戏模式时由 oblivionis-tuner.sh 切换为 performance
+    write /sys/class/kgsl/kgsl-3d0/devfreq/governor msm-adreno-tz 2>/dev/null
+    # GPU 最小频率: 降低空闲功耗
+    # Adreno 650 最低频率 257MHz
+    write /sys/class/kgsl/kgsl-3d0/devfreq/min_freq 257000000 2>/dev/null
+    # GPU 允许的最大空闲时间 (ms): 空闲后快速降频
+    write /sys/class/kgsl/kgsl-3d0/devfreq/polling_time 16 2>/dev/null
+    # GPU 超时降频 (ms): 16ms 对应 60fps
+    write /sys/class/kgsl/kgsl-3d0/idle_timer 32 2>/dev/null
+
+    # =====================================================================
+    # CPU Idle 优化 (深度省电)
+    # =====================================================================
+
+    # CPU idle governor: menu (预测性，平衡性能与功耗)
+    # menu governor 会根据历史预测选择合适的 C-state
+    write /sys/devices/system/cpu/cpuidle/governor menu 2>/dev/null
+    # CPU idle driver: 允许深度 C-state (C2/C3)
+    # 深度 C-state 在空闲时大幅降低功耗
+    write /sys/devices/system/cpu/cpuidle/use_deepest_state 1 2>/dev/null
+
+    # =====================================================================
+    # 后台进程优化 (省电 + 提升前台流畅度)
+    # =====================================================================
+
+    # ---- 调度器: 后台进程优先级降低 ----
+    # sched_tunable_scaling: 1 = 按比例缩放，改善多核负载均衡
+    write /proc/sys/kernel/sched_tunable_scaling 1 2>/dev/null
+    # sched_time_avg: 调度时间平均窗口 (ms)，设 1000 更平滑
+    write /proc/sys/kernel/sched_time_avg 1000 2>/dev/null
+
+    # =====================================================================
+    # 网络省电优化
+    # =====================================================================
+
+    # ---- WiFi 省电: 开启 PS 模式 ----
+    # 1=开启省电 (均衡模式默认; 游戏时由 tuner 关闭降低延迟)
+    write /proc/sys/net/ieee80211/wifi_powersave 1 2>/dev/null
+
+    # ---- TCP: 减少保活探测频率 (省电) ----
+    write /proc/sys/net/ipv4/tcp_tw_reuse 1 2>/dev/null
+    write /proc/sys/net/ipv4/tcp_fin_timeout 15 2>/dev/null
+    write /proc/sys/net/ipv4/tcp_max_tw_buckets 8192 2>/dev/null
+
+    # =====================================================================
+    # 内存访问优化 (降低功耗)
+    # =====================================================================
+
+    # ---- laptop_mode: 启用轻度磁盘聚合写 (省电) ----
+    # 0=关闭, 1=轻度聚合 (移动端设 1 减少磁盘唤醒)
+    write /proc/sys/vm/laptop_mode 1 2>/dev/null
+
+    # =====================================================================
+    # 工作队列省电模式 (降低功耗)
+    # =====================================================================
+    # power_efficient=1: 让工作队列更倾向于在当前 CPU 上执行
+    # 而非唤醒空闲 CPU，减少跨核唤醒开销
+    write /sys/module/workqueue/parameters/power_efficient 1 2>/dev/null
+
+    # =====================================================================
+    # 定时器迁移 (降低功耗)
+    # =====================================================================
+    # timer_migration=1: 允许定时器迁移到最空闲的 CPU
+    # 减少多核定时器唤醒，让其他核更深度睡眠
+    write /proc/sys/kernel/timer_migration 1 2>/dev/null
+
+    # =====================================================================
+    # WALT 调度器增强微调 (降功耗 + 提性能)
+    # =====================================================================
+    # sched_coloc_downmigrate: 允许负载下降时快速下迁移 (省电)
+    write /proc/sys/kernel/sched_coloc_downmigrate 1 2>/dev/null
+    # sched_freq_aggregate: 频率聚合 (1=启用，减少不必要升频)
+    write /proc/sys/kernel/sched_freq_aggregate 1 2>/dev/null
+    # sched_task_unfilter_period_us: 任务过滤周期 (减少小任务触发升频)
+    write /proc/sys/kernel/sched_task_unfilter_period_us 500000 2>/dev/null
+    # sched_boost_top_app: 前台应用 boost (1=启用，提升前台流畅度)
+    write /proc/sys/kernel/sched_boost_top_app 1 2>/dev/null
+    # sched_prefer_spread: 优先分散小核 (1=启用，大核留给重任务)
+    write /proc/sys/kernel/sched_prefer_spread 1 2>/dev/null
+
+    # =====================================================================
+    # Devfreq DDR 带宽缩放 (降功耗)
+    # =====================================================================
+    # 设置 DDR 带宽 governor 为 performance (均衡模式默认不限制)
+    # 低电量/息屏时由 tuner 限制带宽
+    # SM8250 devfreq 路径 (可能不存在，2>/dev/null 容错)
+    write /sys/class/devfreq/soc:qcom,cpu-cpu-llcc-bw/governor performance 2>/dev/null
+    write /sys/class/devfreq/soc:qcom,cpu-llcc-ddr-bw/governor performance 2>/dev/null
+
+    # =====================================================================
+    # Runtime PM 省电 (降低功耗)
+    # =====================================================================
+    # 控制设备运行时挂起超时 (ms)
+    # 较短的超时让设备更快进入低功耗状态
+    write /sys/devices/system/cpu/cpuidle/use_deepest_state 1 2>/dev/null
+
+    # =====================================================================
+    # SLUB 分配器优化 (提性能 + 降开销)
+    # =====================================================================
+    # min_order: 最小分配阶 (0=默认，保持单页分配减少碎片)
+    # 通过 sysfs 控制 SLUB (如果可用)
+    # slub_min_objects: 最小对象数 (减少 partial slab 数量)
+    write /sys/kernel/slab/proc_inode_cache/order 1 2>/dev/null
+
+    # =====================================================================
+    # I/O 增强优化 (提性能 + 降功耗)
+    # =====================================================================
+    # wbt_lat_usec: writeback throttling 延迟目标 (usec)
+    # 设 75000us: 平衡写入延迟和吞吐量
+    write /sys/block/sda/queue/wbt_lat_usec 75000 2>/dev/null
+    # write_cache: 启用写缓存 (write back)
+    # 注: UFS 有硬件保护，writeback 可提升随机写性能
+    write /sys/block/sda/queue/write_cache write_back 2>/dev/null
+    # queue_iosched: ADIOS 已在 post-fs-data 设置
+    # 附加: nr_zones 优化 (UFS 单 zone)
+    write /sys/block/sda/queue/nr_zones 1 2>/dev/null
+
+    # =====================================================================
+    # CPU 负载迁移优化 (提性能 + 降功耗)
+    # =====================================================================
+    # sched_busy_hyst_enable: 忙碌滞后 (1=启用)
+    # 避免任务在核间频繁迁移，减少迁移开销
+    write /sys/devices/system/cpu/busy_hyst/busy_hyst_enable 1 2>/dev/null
+    # sched_busy_hysteresis: 忙碌滞后窗口 (us)
+    # 384000us: 6ms 滞后窗口，避免短峰值触发迁移
+    write /sys/devices/system/cpu/busy_hyst/busy_hyst_cpu0 384000 2>/dev/null
+    write /sys/devices/system/cpu/busy_hyst/busy_hyst_cpu4 384000 2>/dev/null
+    write /sys/devices/system/cpu/busy_hyst/busy_hyst_cpu7 384000 2>/dev/null
+
+    # =====================================================================
+    # PM QoS (Power Management Quality of Service)
+    # =====================================================================
+    # cpu_dma_latency: CPU DMA 延迟 QoS (usec)
+    # 设 100: 允许 CPU 进入浅度睡眠但不过深 (平衡响应和省电)
+    # 注: 此值为 PM QoS 约束，-1 表示无约束
+    # write /dev/cpu_dma_latency 100 2>/dev/null
+
+    # =====================================================================
+    # 网络中断亲和性 (降功耗)
+    # =====================================================================
+    # 将网络中断绑定到银核 (cpu0-3)
+    # 减少大核/Prime核被网络中断唤醒的概率
+    exec - root root -- /system/bin/sh -c "for irq in $(cat /proc/interrupts 2>/dev/null | grep -iE 'wlan|wifi|eth|rmnet' | awk -F: '{print $1}' | tr -d ' '); do echo 0f > /proc/irq/$irq/smp_affinity 2>/dev/null; done"
+
+    # =====================================================================
+    # SCHED_FEAT 调度器特性控制 (提性能 + 降延迟)
+    # =====================================================================
+    # 通过 /proc/sys/kernel/sched_* 控制调度器行为
+    # NEXT_BUDDY: 唤醒时优先选择刚唤醒的任务 (降低延迟)
+    write /proc/sys/kernel/sched_features 6118527 2>/dev/null
+    # sched_wakeup_granularity_ns 已在上方设置
+
+    # ---- 主动内存碎片整理 (5.16 sysctl, 4.19 可能可用) ----
+    # compaction_proactiveness: 0-100, 默认 20
+    # 设 20: 适度主动整理，减少长期碎片化
+    write /proc/sys/vm/compaction_proactiveness 20 2>/dev/null
+
+    # =====================================================================
+    # GPU AdrenoBoost (GPU 性能增强)
+    # =====================================================================
+    # AdrenoBoost: Adreno GPU 性能增强模式
+    # 0=禁用, 1=启用 (部分内核支持)
+    write /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 0 2>/dev/null
+    # 注: 默认禁用 AdrenoBoost (均衡模式省电)
+    # 游戏模式时由 tuner 脚本开启
+
+    # =====================================================================
+    # 振动器强度控制 (自定义内核常见特性)
+    # =====================================================================
+    # OnePlus 振动器强度 (0-100, 默认 80)
+    # vtg_level: 电压级别控制
+    write /sys/devices/virtual/timed_output/vibrator/vtg_level 80 2>/dev/null
+    # 注: 用户可通过 sysfs 调整振动强度
+
+    # =====================================================================
+    # Wakelock 优化 (减少不必要唤醒)
+    # =====================================================================
+    # wakeup_count: 记录当前活跃的 wake lock 数量
+    # 通过限制 wake lock 持有时间来减少耗电
+    # 注: 不直接禁用 wake lock (会破坏功能)，仅优化统计
+
+    # =====================================================================
+    # 文件系统 fsync 优化 (性能)
+    # =====================================================================
+    # dirty 参数已在上方设置 (dirty_ratio=15, dirty_background_ratio=5)
+    # dirty_writeback_centisecs=250 (2.5s) 已足够低
+    # 不禁用 fsync (数据安全), 通过 dirty 参数控制写入频率
+
+    # =====================================================================
+    # LMK (Low Memory Killer) 调优
+    # =====================================================================
+    # Android 用户态 lmkd 基于 PSI 触发，内核 LMK 参数仅备用
+    # minfree: 可用内存阈值 (页面数, 1 page = 4KB)
+    # oom_adj: 对应的 oom_adj 阈值
+    # 格式: <minfree1> <minfree2> ... <oom_adj1> <oom_adj2> ...
+    # 注: Android 10+ 使用用户态 lmkd，内核 LMK 参数仅参考
+    # write /sys/module/lowmemorykiller/parameters/minfree "18432,23040,27648,32256,36864" 2>/dev/null
+
+    # =====================================================================
+    # 输入设备延迟优化 (降低触控延迟)
+    # =====================================================================
+    # 减少输入事件报告延迟
+    write /sys/devices/virtual/input/input*/event_dev->poll_interval 0 2>/dev/null
+    # 触控采样率提升 (如果支持)
+    write /sys/devices/virtual/fts_ts/ts0/report_rate 160 2>/dev/null
+
+    # =====================================================================
+    # 内存回收优化 (长期运行稳定性)
+    # =====================================================================
+    # percpu_pagelist_fraction: 0 = 自动管理 (默认)
+    # 在高内存压力时设非零值可改善分配延迟
+    write /proc/sys/vm/percpu_pagelist_fraction 0 2>/dev/null
+
+    # ---- zone_reclaim_mode: 0 = 禁用 (单 SoC 无需 zone reclaim) ----
+    write /proc/sys/vm/zone_reclaim_mode 0 2>/dev/null
+
+    # =====================================================================
+    # USB 快充控制 (酷安内核常见特性)
+    # =====================================================================
+    # 调整 USB 充电电流限制, 允许更高电流充电
+    # OnePlus 9R 支持快充, 此参数可优化充电速度
+    # 注: 具体路径因设备而异, 使用 2>/dev/null 容错
+    # usb_fastcharge: 1=启用快充模式
+    write /sys/class/power_supply/usb/fastcharge 1 2>/dev/null
+    # input_current_max: 最大输入电流 (微安)
+    # 设 3000000=3A (Warp Charge 30T 标准)
+    write /sys/class/power_supply/usb/input_current_max 3000000 2>/dev/null
+    # 充电电流限制 (微安): -1 表示不限制
+    write /sys/class/power_supply/battery/constant_charge_current_max -1 2>/dev/null
+
+    # =====================================================================
+    # 背光亮度控制增强 (酷安内核常见特性)
+    # =====================================================================
+    # 降低最低亮度, 使夜间使用更舒适
+    # OnePlus 9R LCD 背光控制
+    # brightness_dimmer: 额外降低最低亮度 (0-255)
+    write /sys/class/leds/lcd-backlight/brightness_dimmer 1 2>/dev/null
+    # backlight_minimum: 最低亮度值
+    write /sys/class/leds/lcd-backlight/min_brightness 2 2>/dev/null
+
+    # =====================================================================
+    # F2FS 高级调优 (酷安内核常见特性)
+    # =====================================================================
+    # F2FS 垃圾回收: 紧急 GC (加速后台清理)
+    # gc_urgent: 0=关闭, 1=紧急, 2=高优先级
+    write /sys/fs/f2fs/sda/gc_urgent 1 2>/dev/null
+    # gc_urgent_sleep_time: GC 紧急模式睡眠时间 (ms)
+    write /sys/fs/f2fs/sda/gc_urgent_sleep_time 500 2>/dev/null
+    # F2FS 内存回收: 释放不必要的缓存
+    write /sys/fs/f2fs/sda/reclaim_segments 10 2>/dev/null
+    # F2FS 块预分配 (提升顺序写入性能)
+    write /sys/fs/f2fs/sda/lifetime_write_kbytes 0 2>/dev/null
+
+    # =====================================================================
+    # UFS 存储调优 (酷安内核常见特性)
+    # =====================================================================
+    # UFS 队列深度: 提高并发 I/O 请求处理能力
+    write /sys/block/sda/device/queue_depth 32 2>/dev/null
+    # UFS WriteBooster: 启用写入加速缓存
+    write /sys/block/sda/device/wb_buf_flush_en 1 2>/dev/null
+    write /sys/block/sda/device/wb_flush_buffer 1 2>/dev/null
+
+    # =====================================================================
+    # 音频增益控制 (酷安内核 Sound Control 特性)
+    # =====================================================================
+    # 内核级音频增益控制, 可提升最大音量
+    # 注: OnePlus 9R 使用高通 ASoC, 路径可能不同
+    # sound_control_3: 音频增益控制 (0=关闭, 1=启用)
+    write /sys/kernel/sound_control_3/enabled 0 2>/dev/null
+    # headphone_gain: 耳机增益 (dB, -40 到 20)
+    write /sys/kernel/sound_control_3/headphone_gain 0 2>/dev/null
+    # speaker_gain: 扬声器增益 (dB, -40 到 20)
+    write /sys/kernel/sound_control_3/speaker_gain 0 2>/dev/null
+    # mic_gain: 麦克风增益 (dB, -40 到 20)
+    write /sys/kernel/sound_control_3/mic_gain 0 2>/dev/null
+    # 注: 默认不启用音效增强, 用户可通过 sysfs 自行调整
+    # 不预设高增益以保护扬声器硬件
+
+    # =====================================================================
+    # 热管理增强调优 (酷安内核常见特性)
+    # =====================================================================
+    # thermal_message sconfig: 已在上方设置 (13=正常, 0=解除限制)
+    # 额外热参数:
+    # skin_type: 皮肤温度传感器类型
+    write /sys/class/thermal/thermal_message/skin_type 1 2>/dev/null
+    # thermal_limit: 温度限制阈值 (mC)
+    # 设 45000=45°C: 允许更高温度不过早降频
+    write /sys/class/thermal/thermal_message/thermal_limit 45000 2>/dev/null
+    # mute_mode: 静音模式 (温控日志)
+    write /sys/class/thermal/thermal_message/mute_mode 0 2>/dev/null
+
+    # =====================================================================
+    # CPU 电压控制 (酷安内核 Undervolting 特性)
+    # =====================================================================
+    # 通过 sysfs 调整 CPU 频点电压 (微调省电)
+    # 注: 具体路径和可用性取决于厂商内核是否暴露电压表
+    # cpuboost: CPU boost 参数 (已在上方设置)
+    # 额外: 允许 CPU 更低频率运行
+    write /sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies 0 2>/dev/null
+
+    # =====================================================================
+    # 网络中断聚合调优 (酷安内核网络优化)
+    # =====================================================================
+    # 减少网络中断频率, 降低 CPU 开销
+    # 注: 具体路径因网卡驱动而异
+    # rx-usecs: 接收中断聚合延迟 (微秒)
+    exec - root root -- /system/bin/sh -c "for iface in \$(ls /sys/class/net/ 2>/dev/null); do [ -f /sys/class/net/\$iface/device/adaptive-rx-coalescing ] && echo 1 > /sys/class/net/\$iface/device/adaptive-rx-coalescing 2>/dev/null; done"
+
+    # =====================================================================
+    # 内核 TCP 时间戳与窗口优化 (酷安内核网络优化)
+    # =====================================================================
+    # tcp_timestamps: 启用时间戳 (RTT 测量)
+    write /proc/sys/net/ipv4/tcp_timestamps 1 2>/dev/null
+    # tcp_sack: 选择性确认 (改善丢包恢复)
+    write /proc/sys/net/ipv4/tcp_sack 1 2>/dev/null
+    # tcp_low_latency: 低延迟模式 (移动端优先响应)
+    write /proc/sys/net/ipv4/tcp_low_latency 1 2>/dev/null
+    # tcp_no_metrics_save: 不保存路由指标 (每次连接重新计算)
+    write /proc/sys/net/ipv4/tcp_no_metrics_save 1 2>/dev/null
+    # tcp_ecn: ECN (Explicit Congestion Notification) 已在 config 中启用
+    # tcp_adv_win_scale: 接收窗口缩放 (1=启用自适应)
+    write /proc/sys/net/ipv4/tcp_adv_win_scale 1 2>/dev/null
+
+    # =====================================================================
+    # 内核 panic 增强恢复 (酷安内核防格机增强)
+    # =====================================================================
+    # panic_on_rcu_stall: RCU 停滞时触发 panic (检测死锁)
+    write /proc/sys/kernel/panic_on_rcu_stall 1 2>/dev/null
+    # panic_on_warn: 警告时触发 panic (过于激进, 禁用)
+    # write /proc/sys/kernel/panic_on_warn 0 2>/dev/null
+    # oops_all_cpu_backtrace: oops 时打印所有 CPU 调用栈
+    write /proc/sys/kernel/oops_all_cpu_backtrace 1 2>/dev/null
+
+    # =====================================================================
+    # PID 和线程限制优化 (容器/多任务支持)
+    # =====================================================================
+    # pid_max: 最大进程数 (默认 32768, 提高以支持更多并发)
+    write /proc/sys/kernel/pid_max 65536 2>/dev/null
+    # threads-max: 最大线程数
+    write /proc/sys/kernel/threads-max 120000 2>/dev/null
+    # max_map_count: 最大内存映射数 (已在上方设置, 此处确认)
+    # write /proc/sys/vm/max_map_count 262144
+
+    # =====================================================================
+    # 文件描述符限制优化 (高并发支持)
+    # =====================================================================
+    # file-max: 系统最大文件描述符数
+    write /proc/sys/fs/file-max 1048576 2>/dev/null
+    # nr_open: 单进程最大文件描述符数
+    write /proc/sys/fs/nr_open 1048576 2>/dev/null
+    # pipe-user-pages-soft: 管道用户页软限制
+    write /proc/sys/fs/pipe-user-pages-soft 16384 2>/dev/null
+
+    # =====================================================================
+    # 内核信号处理优化 (降低延迟)
+    # =====================================================================
+    # core_pipe_limit: core dump 管道限制 (0=禁止 core dump 管道)
+    write /proc/sys/kernel/core_pipe_limit 0 2>/dev/null
+    # core_uses_pid: core dump 文件名包含 PID
+    write /proc/sys/kernel/core_uses_pid 0 2>/dev/null
+
+    # =====================================================================
+    # 启动 Oblivionis 智能调参服务 v2
+    # =====================================================================
+    # 后台服务，每 3 秒检测一次:
+    #   - 息屏检测: backlight=0 → Doze 模式 (极低功耗)
+    #   - 低电量: 电量 ≤15% 且未充电 → 低电量模式
+    #   - 游戏检测: GPU busy >40% 且 CPU loadavg >4 → 游戏模式
+    #   - 电池过热: temp >42°C → 退出游戏模式
+    #   - 默认: 均衡模式 (各项都好)
+    # 模式优先级: 息屏Doze > 低电量 > 过热 > 游戏 > 均衡
+
+    # 复制脚本到 /data 并设置权限
+    exec - root root -- /system/bin/sh -c "cp /oblivionis-tuner.sh /data/oblivionis-tuner.sh 2>/dev/null && chmod 755 /data/oblivionis-tuner.sh 2>/dev/null"
+
+    # 启动服务 (持续运行，非 oneshot)
+    start oblivionis_tuner
+
+# =============================================================================
+# Oblivionis 智能调参服务 (持续运行)
+# =============================================================================
+service oblivionis_tuner /system/bin/sh /data/oblivionis-tuner.sh
+    class late_start
+    user root
+    group root system
+    disabled

@@ -1,0 +1,35 @@
+# TCP BBR v2 拥塞控制 backport
+#
+# 特性: TCP BBR v2 拥塞控制算法
+# 来源: Google BBR v2 development branch
+# 主线状态: 未合入主线 (仍在开发中)，但可用于 backport
+#
+# 核心改进 (相比 BBR v1):
+#   - 拥塞损失检测: 区分随机丢包和拥塞丢包
+#   - ECN (Explicit Congestion Notification) 支持
+#   - 更公平的带宽分享
+#   - 减少 bufferbloat
+#   - probe-RTT 阶段优化
+#
+# 受影响文件:
+#   net/ipv4/tcp_bbr2.c (新增)
+#   include/net/tcp.h
+#   net/ipv4/tcp_input.c
+#
+# backport 难度: 中等
+#   - BBR v2 是独立的 tcp_congestion_ops
+#   - 需要修改 tcp_input.c 添加 loss detection hook
+#   - 4.19 的 TCP 栈与 5.x 有差异但不大
+#
+# backport 价值: 中-高
+#   - 移动网络下更好的吞吐量
+#   - 减少延迟
+#   - 对弱网环境改善明显
+#
+# 补丁来源:
+#   https://github.com/google/bbr (v2 分支)
+#   或从 android13-5.15-lts 提取 (Google 可能已添加)
+#
+# 配置:
+#   CONFIG_TCP_CONG_BBR2=y
+#   CONFIG_DEFAULT_TCP_CONG="bbr2"

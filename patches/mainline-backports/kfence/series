@@ -1,0 +1,18 @@
+# KFENCE backport series (Linux 5.12 → 4.19)
+# Apply in order — later patches depend on earlier ones
+# NOTE: These patches are auto-downloaded by generate-patches.sh
+# If files don't exist, run generate-patches.sh first.
+01-kfence-infrastructure.patch
+04-kfence-slab-hook.patch
+03-kfence-arm64-support.patch
+05-kfence-fix-sample-interval-zero.patch
+07-kfence-static-key.patch
+09-kfence-task-idle.patch
+06-kfence-show-allocation-info.patch
+10-kfence-debugfs-toggle.patch
+13-kfence-slab-types.patch
+08-kfence-optimize-arm64-protect.patch
+11-kfence-fix-report-format.patch
+12-kfence-report-oom.patch
+14-kfence-tlb-compat.patch
+02-kfence-test-suite.patch

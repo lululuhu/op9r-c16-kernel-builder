@@ -1,0 +1,28 @@
+# WireGuard VPN — android-4.19-stable 已内置
+#
+# 特性: 现代 VPN 协议，内核态实现
+# 主线版本: 5.6
+# Android: Google 在 android12-4.19 树中添加
+#
+# 状态: 已通过 CONFIG_WIREGUARD=y 启用
+#
+# 背景:
+#   WireGuard 已被 Google backport 到 android-4.19-stable 树。
+#   LineageOS lineage-23.2 分支基于 android-4.19，应该已包含
+#   WireGuard 代码。只需在 .config 中启用即可。
+#
+# 验证:
+#   在内核源码中检查:
+#   ls net/wireguard/  # 应存在
+#   grep WIREGUARD net/wireguard/Kconfig  # 应有配置选项
+#
+# 如果源码中不存在 WireGuard:
+#   需要从 wireguard-linux-compat backport
+#   https://github.com/WireGuard/wireguard-linux-compat
+#   支持 3.10 - 5.5 内核，4.19 完全兼容
+#
+# 价值: 高
+#   - 最快的 VPN 协议
+#   - 代码量极小 (~4000 行 vs OpenVPN ~100000 行)
+#   - 现代密码学 (ChaCha20, Poly1305, Curve25519)
+#   - Android 原生支持

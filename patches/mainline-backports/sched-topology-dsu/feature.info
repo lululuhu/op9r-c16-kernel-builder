@@ -1,0 +1,57 @@
+# CPU 集群拓扑修正 — DynamIQ Shared Unit (DSU)
+#
+# 特性: 修正 CPU 集群拓扑，利用 DSU 优化调度决策
+# 目标: 让调度器正确识别 DynamIQ 架构的 CPU 拓扑
+#
+# 背景:
+#   SM8250 (Kona / 骁龙870) 使用 ARM DynamIQ 架构:
+#     - 1x Cortex-A77 @ 2.84GHz (prime)
+#     - 3x Cortex-A77 @ 2.42GHz (gold)
+#     - 4x Cortex-A55 @ 1.80GHz (silver)
+#   所有核心在同一个 DSU (DynamIQ Shared Unit) 中，共享 L3 缓存
+#
+# 问题:
+#   4.19 默认调度拓扑可能将 prime + gold 视为同一 MC domain，
+#   但实际上它们的容量不同（2.84 vs 2.42 GHz），
+#   导致任务迁移时未考虑 L3 缓存亲和性。
+#
+# 修正内容:
+#   1. 调整 sched_domain_hierarchy:
+#      - 正确设置 CPU 容量 (arch_scale_cpu_capacity)
+#      - 识别 L3 (LLC) domain 边界
+#      - 优化 MC level 的 domain flags
+#
+#   2. LLC 缓存亲和性选核:
+#      - wake-up 选核时优先选择同 LLC 的 CPU
+#      - 利用 select_idle_sibling() 的 LLC 优化
+#
+#   3. 锥形 DVFS headroom:
+#      - 不再依赖 CPU 容量计算 DVFS headroom
+#      - 改为基于频率差的固定 headroom (更保守)
+#      - 避免高容量核心 DVFS 不足导致的性能下降
+#
+# 关键提交参考:
+#   - sched/topology: Add sched_domain_flags_fallback for LLC
+#   - sched/fair: Use LLC in select_idle_sibling
+#   - sched/fair: Make tapered DVFS headroom independent of capacity
+#
+# 受影响文件:
+#   arch/arm64/kernel/topology.c
+#   kernel/sched/topology.c
+#   kernel/sched/fair.c
+#   drivers/cpufreq/qcom-cpufreq-hw.c (vendor)
+#
+# backport 难度: 中等-困难
+#   - 需要理解 QCOM 的 cpufreq-hw driver 如何报告容量
+#   - sched_topology 层级受 vendor defconfig 影响
+#   - select_idle_sibling() 在 4.19 与主线差异较大
+#
+# backport 价值: 高
+#   - 更好的 L3 缓存利用率
+#   - 减少 LLC miss 导致的延迟
+#   - 更合理的任务放置
+#
+# 替代方案 (4.19 适配):
+#   1. 通过 schedtune (EAS) 调整任务放置偏好
+#   2. 通过 sysctl sched_domain 调整 topology flags
+#   3. 修改 arch/arm64/kernel/topology.c 中的 capacity 计算

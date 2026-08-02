@@ -1,0 +1,85 @@
+# ===================================================================
+# lemonades_c16_510.fragment
+# Config fragment for OnePlus 9R on 5.10 baseline (GKI path)
+# Use when KERNEL_BASELINE=5.10 in the workflow
+#
+# 5.10 baseline benefits (vs 4.19):
+#   - Native BPF 5.10 (no backport needed: link/iter/ringbuf all present)
+#   - Native BTF support
+#   - Native io_uring
+#   - Native fs-verity
+#   - Native uclamp (5.3)
+#   - Closer to Android 12 GKI (android12-5.10)
+#   - Better energy model / EAS
+#
+# This fragment tunes the 5.10 base for Android 16 + performance.
+# ===================================================================
+
+# ---- BPF / BTF (native in 5.10, just enable) ----
+CONFIG_BPF=y
+CONFIG_BPF_SYSCALL=y
+CONFIG_BPF_JIT=y
+CONFIG_BPF_JIT_ALWAYS_ON=y
+CONFIG_HAVE_EBPF_JIT=y
+CONFIG_CGROUP_BPF=y
+CONFIG_NET_ACT_BPF=y
+CONFIG_NET_CLS_BPF=y
+CONFIG_DEBUG_INFO_BTF=y
+
+# ---- schedutil + uclamp (5.3+, native in 5.10) ----
+CONFIG_UCLAMP_TASK=y
+CONFIG_UCLAMP_BUCKETS_COUNT=20
+CONFIG_UCLAMP_TASK_GROUP=y
+CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+
+# ---- io_uring (native in 5.10) ----
+CONFIG_IO_URING=y
+
+# ---- fs-verity (native in 5.4+) ----
+CONFIG_FS_VERITY=y
+CONFIG_FS_VERITY_BUILTIN_SIGNATURES=y
+
+# ---- PSI (native in 4.20+, available in 5.10) ----
+CONFIG_PSI=y
+
+# ---- CFI (Clang) ----
+CONFIG_CFI_CLANG=y
+CONFIG_CFI_PERMISSIVE=y
+
+# ---- Filesystem: f2fs + erofs with full features ----
+CONFIG_F2FS_FS=y
+CONFIG_F2FS_FS_SECURITY=y
+CONFIG_F2FS_FS_ENCRYPTION=y
+CONFIG_F2FS_FS_COMPRESSION=y
+CONFIG_F2FS_FS_LZ4_COMPRESS=y
+CONFIG_EROFS_FS=y
+CONFIG_EROFS_FS_ZIP=y
+
+# ---- Inline encryption ----
+CONFIG_BLK_INLINE_ENCRYPTION=y
+CONFIG_FS_ENCRYPTION_INLINE_CRYPT=y
+CONFIG_DM_DEFAULT_KEY=y
+
+# ---- TCP BBR ----
+CONFIG_TCP_CONG_BBR=y
+
+# ---- LTO for performance ----
+CONFIG_LTO=y
+CONFIG_LTO_CLANG_THIN=y
+
+# ---- zram ----
+CONFIG_ZRAM=y
+CONFIG_ZRAM_WRITEBACK=y
+CONFIG_ZSMALLOC=y
+
+# ---- Module signing ----
+# NOTE: MODULE_SIG disabled — vendor modules use OEM keys, signing would block boot
+# CONFIG_MODULE_SIG is not set
+# CONFIG_MODULE_SIG_FORCE is not set
+# CONFIG_MODULE_SIG_ALL is not set
+
+# ---- Thermal ----
+CONFIG_THERMAL=y
+CONFIG_CPU_THERMAL=y
+CONFIG_DEVFREQ_THERMAL=y

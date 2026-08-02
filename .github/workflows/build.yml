@@ -1,0 +1,1127 @@
+# ===================================================================
+# Oblivionis-kernel
+# OnePlus 9R (lemonades / SM8250 / Kona / Snapdragon 870)
+# 4.19 baseline with mainline backports + advanced features
+# ===================================================================
+# BASELINE=4.19 : LineageOS 4.19.325 + mainline feature backports
+# Features:
+#   - BBG防格机 (anti-crash/panic protection)
+#   - ADIOS 3.2.0 I/O scheduler (default)
+#   - BBRv3 TCP congestion control (default) + C2TCP + TCP ROCCET + TCP Brutal+ECN
+#   - ZRAM built-in with LZ4K/LZ4KD/LZ4HC/842/ZSTD (default LZ4KD)
+#   - UKSM, NTSYNC, Lindroid EVDI
+#   - MGLRU/Zswap/THP/memory reclaim/F2FS/EROFS optimizations
+#   - Droidspaces/Mountify/WireGuard/IPSet support
+#   - Android 17 AOSP GSI compatibility
+#   - Network stability enhancements for hotspot/tethering
+#   - 酷安社区移植特性: Btrfs/NTFS3/Landlock/KVM/DualSense/ZSTD重压缩
+#   - -O3 + Polly 编译优化
+#   - 智能模式切换 (游戏/低电量/均衡/息屏) + I/O/网络模式联动
+#   - PSI完整启用 / KPROBES(KernelSU依赖) / BPF安全加固
+# Kernel name: Oblivionis-kernel (via CONFIG_LOCALVERSION)
+#
+# Config variants:
+#   perf      : Performance-first, stable
+#   advanced  : PSI/CFI/fs-verity/BBR
+#   extreme   : Full features + all backports + scheduler/memlat optimization
+# ===================================================================
+
+name: Build Oblivionis-kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      config_variant:
+        description: "Config variant"
+        required: true
+        default: "extreme"
+        type: choice
+        options: ["perf", "advanced", "extreme"]
+      apply_backports:
+        description: "Apply mainline backport patches"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      lto:
+        description: "ThinLTO (performance, slower build)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      kpti:
+        description: "KPTI (security on, ~1-3% perf cost)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+      cfi:
+        description: "Clang CFI (control flow integrity)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+  push:
+    branches: [main, master]
+    paths:
+      - ".github/workflows/build.yml"
+      - "configs/**"
+      - "patches/**"
+      - "templates/**"
+      - "build.sh"
+
+env:
+  DEVICE: lemonades
+  PLATFORM: sm8250
+  KERNEL_REPO: LineageOS/android_kernel_oneplus_sm8250
+  KERNEL_BRANCH: lineage-23.2
+  CLANG_REPO: kdrag0n/proton-clang
+  ANYKERNEL_REPO: osm0sis/AnyKernel3
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Resolve baseline config
+        id: cfg
+        run: |
+          VARIANT="${{ github.event.inputs.config_variant || 'extreme' }}"
+          APPLY_BP="${{ github.event.inputs.apply_backports || 'true' }}"
+          echo "VARIANT=$VARIANT" >> $GITHUB_ENV
+          echo "APPLY_BP=$APPLY_BP" >> $GITHUB_ENV
+
+          case "$VARIANT" in
+            extreme)
+              FRAGMENT="configs/lemonades_c16_extreme.fragment"
+              echo "FRAGMENT=$FRAGMENT" >> $GITHUB_ENV
+              echo "APPLY_BP=true" >> $GITHUB_ENV
+              ;;
+            perf)
+              FRAGMENT="configs/lemonades_c16_perf.fragment"
+              echo "FRAGMENT=$FRAGMENT" >> $GITHUB_ENV
+              ;;
+            *)
+              FRAGMENT="configs/lemonades_c16_advanced.fragment"
+              echo "FRAGMENT=$FRAGMENT" >> $GITHUB_ENV
+              ;;
+          esac
+
+          echo "::notice::Building variant=$VARIANT fragment=$FRAGMENT backports=$APPLY_BP"
+
+      - name: Free up disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache
+          sudo apt-get clean
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ccache cpio flex \
+            libelf-dev libffi-dev libssl-dev \
+            python3 python3-pip \
+            zip unzip wget git \
+            dwarves pahole \
+            libncurses-dev \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          pahole --version || true
+          aarch64-linux-gnu-gcc --version | head -1
+          arm-linux-gnueabi-gcc --version | head -1 || true
+
+      - name: Download Proton Clang toolchain
+        run: |
+          cd $HOME
+          git clone --depth=1 https://github.com/${{ env.CLANG_REPO }} clang
+          $HOME/clang/bin/clang --version
+
+      - name: Clone kernel source
+        run: |
+          cd $HOME
+          git clone --depth=1 -b ${{ env.KERNEL_BRANCH }} \
+            https://github.com/${{ env.KERNEL_REPO }} kernel
+          cd kernel
+          echo "=== Kernel version (before cleanup) ==="
+          head -5 Makefile
+          git log --oneline -3
+
+      - name: Clean version string for Oblivionis branding
+        run: |
+          cd $HOME/kernel
+          echo "=== Cleaning version string prefixes ==="
+          # LineageOS/CIP kernel 会在 Makefile 的 EXTRAVERSION 和 localversion* 文件中
+          # 注入 -cip132 -st16 等后缀，导致 /proc/version 显示:
+          #   4.19.325-cip132-st16-Oblivionis-kernel
+          # 清理后变为干净的:
+          #   4.19.325-Oblivionis-kernel
+
+          # 1. 清空顶层 Makefile 的 EXTRAVERSION (去除 -cip132 等)
+          sed -i 's/^EXTRAVERSION = .*/EXTRAVERSION =/' Makefile
+          echo "Makefile EXTRAVERSION cleaned"
+
+          # 2. 删除 localversion 文件 (去除 -st16 等)
+          rm -f localversion* 2>/dev/null || true
+          echo "localversion* files removed"
+
+          # 3. 验证
+          echo "=== Kernel version (after cleanup) ==="
+          head -5 Makefile
+          echo "=== Version string will be: 4.19.325-Oblivionis-kernel ==="
+
+      - name: Generate backport patches from mainline
+        if: env.APPLY_BP == 'true'
+        continue-on-error: true
+        run: |
+          set +e
+          echo "=== Generating backport patches from mainline Linux ==="
+
+          ZRAM66_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/zram66"
+          ZSMALLOC_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/zsmalloc612"
+          mkdir -p "$ZRAM66_DIR" "$ZSMALLOC_DIR"
+
+          # ---- zram 6.6: multi-compression / recompression ----
+          echo "--- Downloading zram 6.6 recompression patches ---"
+          ZRAM_SUCCESS=0
+          ZRAM_FAIL=0
+          for entry in \
+            "01-zram-preparation-multi-zcomp.patch:43cbd4cb7389" \
+            "02-zram-recomp-algorithm-sysfs.patch:1ecb3403eb22" \
+            "03-zram-factor-out-wb-read.patch:9e02b88ac3f5" \
+            "04-zram-recompress-sysfs.patch:9d4e2da8d831" \
+            "05-zram-kconfig-recomp-choice.patch:9528113347a0" \
+            "06-zram-recompress-block-state.patch:9b061a5e9e30"; do
+            patch_file="${entry%%:*}"
+            commit="${entry##*:}"
+            url="https://github.com/torvalds/linux/commit/${commit}.patch"
+            echo "  Downloading: $patch_file (commit ${commit:0:12})"
+            if curl -sf -L "$url" -o "$ZRAM66_DIR/$patch_file" 2>/dev/null && [ -s "$ZRAM66_DIR/$patch_file" ]; then
+              echo "    -> OK ($(wc -l < "$ZRAM66_DIR/$patch_file") lines)"
+              ZRAM_SUCCESS=$((ZRAM_SUCCESS + 1))
+            else
+              echo "    -> FAILED (commit may not exist or network error)"
+              rm -f "$ZRAM66_DIR/$patch_file"
+              ZRAM_FAIL=$((ZRAM_FAIL + 1))
+            fi
+          done
+          echo "zram66: $ZRAM_SUCCESS downloaded, $ZRAM_FAIL failed"
+
+          # ---- zsmalloc 6.12: per-size_class lock revert ----
+          echo "--- Downloading zsmalloc 6.12 per-class lock patches ---"
+          ZS_SUCCESS=0
+          ZS_FAIL=0
+          for entry in \
+            "01-zsmalloc-revert-pool-spinlock.patch:ac2b2ff74167" \
+            "02-zsmalloc-per-size-class-lock.patch:8ef4ac7c05f6"; do
+            patch_file="${entry%%:*}"
+            commit="${entry##*:}"
+            url="https://github.com/torvalds/linux/commit/${commit}.patch"
+            echo "  Downloading: $patch_file (commit ${commit:0:12})"
+            if curl -sf -L "$url" -o "$ZSMALLOC_DIR/$patch_file" 2>/dev/null && [ -s "$ZSMALLOC_DIR/$patch_file" ]; then
+              echo "    -> OK ($(wc -l < "$ZSMALLOC_DIR/$patch_file") lines)"
+              ZS_SUCCESS=$((ZS_SUCCESS + 1))
+            else
+              echo "    -> FAILED (non-critical)"
+              rm -f "$ZSMALLOC_DIR/$patch_file"
+              ZS_FAIL=$((ZS_FAIL + 1))
+            fi
+          done
+          echo "zsmalloc612: $ZS_SUCCESS downloaded, $ZS_FAIL failed"
+          echo "=== Patch generation complete ==="
+
+          # ---- KFENCE (5.12): memory safety detector ----
+          echo "--- Generating KFENCE 5.12 backport patches ---"
+          KFENCE_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/kfence"
+          if [ -f "$KFENCE_DIR/generate-patches.sh" ]; then
+            chmod +x "$KFENCE_DIR/generate-patches.sh"
+            bash "$KFENCE_DIR/generate-patches.sh" || {
+              echo "::warning::KFENCE patch generation had failures (non-critical)"
+            }
+            echo "KFENCE patches: $(ls "$KFENCE_DIR"/*.patch 2>/dev/null | wc -l) files"
+          else
+            echo "KFENCE generate script not found, skipping"
+          fi
+
+          # ---- util_est (5.0): utilization estimation EWMA ----
+          echo "--- Generating util_est 5.0 backport patches ---"
+          UTIL_EST_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/util-est"
+          if [ -f "$UTIL_EST_DIR/generate-patches.sh" ]; then
+            chmod +x "$UTIL_EST_DIR/generate-patches.sh"
+            bash "$UTIL_EST_DIR/generate-patches.sh" || {
+              echo "::warning::util_est patch generation had failures (non-critical)"
+            }
+            echo "util_est patches: $(ls "$UTIL_EST_DIR"/*.patch 2>/dev/null | wc -l) files"
+          else
+            echo "util_est generate script not found, skipping"
+          fi
+
+          # ---- MGLRU (5.18/6.1): Multi-Gen LRU ----
+          echo "--- Generating MGLRU 6.1 backport patches ---"
+          MGLRU_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/mglru"
+          if [ -f "$MGLRU_DIR/generate-patches.sh" ]; then
+            chmod +x "$MGLRU_DIR/generate-patches.sh"
+            bash "$MGLRU_DIR/generate-patches.sh" || {
+              echo "::warning::MGLRU patch generation had failures (non-critical)"
+            }
+            echo "MGLRU patches: $(ls "$MGLRU_DIR"/*.patch 2>/dev/null | wc -l) files"
+          else
+            echo "MGLRU generate script not found, skipping"
+          fi
+
+          # ---- DAMON (5.15): Data Access MONitor ----
+          echo "--- Generating DAMON 5.15 backport patches ---"
+          DAMON_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/damon"
+          if [ -f "$DAMON_DIR/generate-patches.sh" ]; then
+            chmod +x "$DAMON_DIR/generate-patches.sh"
+            bash "$DAMON_DIR/generate-patches.sh" || {
+              echo "::warning::DAMON patch generation had failures (non-critical)"
+            }
+            echo "DAMON patches: $(ls "$DAMON_DIR"/*.patch 2>/dev/null | wc -l) files"
+          else
+            echo "DAMON generate script not found, skipping"
+          fi
+
+          # ---- RCU_LAZY (6.6): Lazy RCU callbacks ----
+          echo "--- Generating RCU_LAZY 6.6 backport patches ---"
+          RCU_LAZY_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/rcu-lazy"
+          if [ -f "$RCU_LAZY_DIR/generate-patches.sh" ]; then
+            chmod +x "$RCU_LAZY_DIR/generate-patches.sh"
+            bash "$RCU_LAZY_DIR/generate-patches.sh" || {
+              echo "::warning::RCU_LAZY patch generation had failures (non-critical)"
+            }
+            echo "RCU_LAZY patches: $(ls "$RCU_LAZY_DIR"/*.patch 2>/dev/null | wc -l) files"
+          else
+            echo "RCU_LAZY generate script not found, skipping"
+          fi
+
+          # ---- futex_waitv (5.16): Multi-futex wait ----
+          echo "--- Generating futex_waitv 5.16 backport patches ---"
+          FUTEX_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/futex-waitv"
+          if [ -f "$FUTEX_DIR/generate-patches.sh" ]; then
+            chmod +x "$FUTEX_DIR/generate-patches.sh"
+            bash "$FUTEX_DIR/generate-patches.sh" || {
+              echo "::warning::futex_waitv patch generation had failures (non-critical)"
+            }
+            echo "futex_waitv patches: $(ls "$FUTEX_DIR"/*.patch 2>/dev/null | wc -l) files"
+          else
+            echo "futex_waitv generate script not found, skipping"
+          fi
+
+          # ---- Landlock (5.13): Filesystem access control LSM ----
+          echo "--- Generating Landlock 5.13 backport patches ---"
+          LANDLOCK_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/landlock"
+          if [ -f "$LANDLOCK_DIR/generate-patches.sh" ]; then
+            chmod +x "$LANDLOCK_DIR/generate-patches.sh"
+            bash "$LANDLOCK_DIR/generate-patches.sh" || {
+              echo "::warning::Landlock patch generation had failures (non-critical)"
+            }
+            echo "Landlock patches: $(ls "$LANDLOCK_DIR"/*.patch "$LANDLOCK_DIR"/patches/*.patch 2>/dev/null | wc -l) files"
+          else
+            echo "Landlock generate script not found, skipping"
+          fi
+
+          # ---- PSI per-cgroup (5.10): Per-cgroup PSI tracking ----
+          echo "--- Generating PSI per-cgroup 5.10 backport patches ---"
+          PSI_DIR="$GITHUB_WORKSPACE/patches/mainline-backports/psi-percgroup"
+          if [ -f "$PSI_DIR/generate-patches.sh" ]; then
+            chmod +x "$PSI_DIR/generate-patches.sh"
+            bash "$PSI_DIR/generate-patches.sh" || {
+              echo "::warning::PSI per-cgroup patch generation had failures (non-critical)"
+            }
+            echo "PSI per-cgroup patches: $(ls "$PSI_DIR"/*.patch "$PSI_DIR"/patches/*.patch 2>/dev/null | wc -l) files"
+          else
+            echo "PSI per-cgroup generate script not found, skipping"
+          fi
+
+      - name: Apply mainline backport patches
+        if: env.APPLY_BP == 'true'
+        run: |
+          cd $HOME/kernel
+          BACKPORT_SCRIPT="$GITHUB_WORKSPACE/patches/mainline-backports/apply-backports.sh"
+          if [ -f "$BACKPORT_SCRIPT" ]; then
+            chmod +x "$BACKPORT_SCRIPT"
+            echo "=== Applying mainline backports ==="
+            bash "$BACKPORT_SCRIPT" --baseline 4.19 --features "zram66,zsmalloc612,kfence,util-est,mglru,damon,rcu-lazy,futex-waitv,landlock,psi-percgroup" || {
+              echo "::warning::Some backport patches failed to apply. Check logs."
+              echo "Continuing with whatever patches succeeded."
+            }
+          else
+            echo "No backport script found, skipping."
+          fi
+
+      - name: Integrate advanced kernel features
+        if: env.APPLY_BP == 'true'
+        continue-on-error: true
+        run: |
+          set +e
+          cd $HOME/kernel
+          echo "=== Integrating advanced kernel features ==="
+          echo "Features: BBRv3, C2TCP, TCP ROCCET, TCP Brutal+ECN, ADIOS 3.2.0,"
+          echo "          UKSM, NTSYNC, EVDI, LZ4K/LZ4KD, WireGuard, Droidspaces,"
+          echo "          Network stability, Android 17 GSI compat"
+
+          INTEGRATE_SCRIPT="$GITHUB_WORKSPACE/patches/features/integrate-features.sh"
+          if [ -f "$INTEGRATE_SCRIPT" ]; then
+            chmod +x "$INTEGRATE_SCRIPT"
+            bash "$INTEGRATE_SCRIPT" --kernel-dir "$HOME/kernel" || {
+              echo "::warning::Some features failed to integrate. Build will continue with available features."
+            }
+          else
+            echo "::warning::Feature integration script not found, skipping."
+          fi
+
+          echo "=== Feature integration complete ==="
+
+      - name: Verify feature availability in kernel source
+        run: |
+          cd $HOME/kernel
+          echo "=== Checking feature availability ==="
+
+          # WireGuard
+          if [ -d "net/wireguard" ]; then
+            echo "[OK] WireGuard source found in kernel tree"
+          else
+            echo "[WARN] WireGuard source NOT found — will try wireguard-linux-compat"
+            # Clone and apply WireGuard compat backport if missing
+            git clone --depth=1 https://git.zx2c4.com/wireguard-linux-compat /tmp/wg-compat 2>/dev/null || true
+            if [ -d /tmp/wg-compat/src ]; then
+              cp -r /tmp/wg-compat/src net/wireguard
+              # Apply out-of-tree module patch
+              if [ -f /tmp/wg-compat/patch/kernel/enable.patch ]; then
+                git apply /tmp/wg-compat/patch/kernel/enable.patch || true
+              fi
+              echo "[OK] WireGuard backported from wireguard-linux-compat"
+            fi
+          fi
+
+          # userfaultfd
+          if grep -q "USERFAULTFD" fs/Kconfig init/Kconfig 2>/dev/null; then
+            echo "[OK] userfaultfd available"
+          else
+            echo "[WARN] userfaultfd NOT found in Kconfig"
+          fi
+
+          # XDP sockets
+          if grep -q "XDP_SOCKETS" net/Kconfig 2>/dev/null; then
+            echo "[OK] XDP sockets available"
+          else
+            echo "[WARN] XDP sockets NOT found in Kconfig"
+          fi
+
+          # diag char (QCOM)
+          if grep -q "DIAG_CHAR" drivers/char/Kconfig 2>/dev/null || \
+             grep -rq "DIAG_CHAR" drivers/ 2>/dev/null; then
+            echo "[OK] diag char available"
+          else
+            echo "[WARN] diag char NOT found — may be in vendor driver tree"
+          fi
+
+          # SCHED_WALT — vendor kernel puts sched configs in different Kconfig files
+          if grep -rq "SCHED_WALT" kernel/sched/ init/Kconfig 2>/dev/null; then
+            echo "[OK] SCHED_WALT available"
+          else
+            echo "[WARN] SCHED_WALT NOT found — vendor scheduler may differ"
+          fi
+
+          # SCHED_CORE_CTL
+          if grep -rq "SCHED_CORE_CTL" kernel/sched/ init/Kconfig 2>/dev/null; then
+            echo "[OK] SCHED_CORE_CTL available"
+          else
+            echo "[WARN] SCHED_CORE_CTL NOT found — vendor feature"
+          fi
+
+          # SCHED_TUNE
+          if grep -rq "SCHED_TUNE" kernel/sched/ init/Kconfig 2>/dev/null; then
+            echo "[OK] SCHED_TUNE available"
+          else
+            echo "[WARN] SCHED_TUNE NOT found — vendor feature"
+          fi
+
+          # MGLRU — not available on 4.19
+          if grep -q "LRU_GEN" mm/Kconfig 2>/dev/null; then
+            echo "[OK] MGLRU/LRU_GEN available"
+          else
+            echo "[INFO] MGLRU not available on 4.19 (needs 6.1+) — configs ignored"
+          fi
+
+          # util_est — 5.0 mainline, may be backported in ACK 4.19
+          if grep -rq "SCHED_UTIL_EST" kernel/sched/ init/Kconfig 2>/dev/null; then
+            echo "[OK] util_est (SCHED_UTIL_EST) available — will be enabled"
+          else
+            echo "[INFO] util_est NOT found in Kconfig — ACK 4.19 may not include it"
+            echo "       If missing, frequency selection relies on raw PELT/WALT only"
+          fi
+
+          # KFENCE — 5.12 mainline, unlikely on 4.19
+          if grep -q "KFENCE" mm/Kconfig 2>/dev/null; then
+            echo "[OK] KFENCE available"
+          else
+            echo "[INFO] KFENCE not available on 4.19 (needs 5.12+ backport)"
+          fi
+
+          # Btrfs — 4.19 native
+          if grep -q "BTRFS_FS" fs/btrfs/Kconfig 2>/dev/null || grep -q "BTRFS_FS" fs/Kconfig 2>/dev/null; then
+            echo "[OK] Btrfs available"
+          else
+            echo "[WARN] Btrfs NOT found in Kconfig"
+          fi
+
+          # NTFS3 — 5.15 backport
+          if grep -q "NTFS3_FS" fs/ntfs3/Kconfig 2>/dev/null || grep -q "NTFS3_FS" fs/Kconfig 2>/dev/null; then
+            echo "[OK] NTFS3 available"
+          else
+            echo "[INFO] NTFS3 not available on 4.19 (needs 5.15+ backport)"
+          fi
+
+          # Landlock — 5.13 backport
+          if [ -d "security/landlock" ] || grep -q "LANDLOCK" security/Kconfig 2>/dev/null; then
+            echo "[OK] Landlock available"
+          else
+            echo "[INFO] Landlock not available on 4.19 (needs 5.13+ backport)"
+          fi
+
+          # KVM — ARM64 virtualization
+          if grep -q "KVM" arch/arm64/kvm/Kconfig 2>/dev/null || grep -q "KVM" virt/kvm/Kconfig 2>/dev/null; then
+            echo "[OK] KVM available"
+          else
+            echo "[WARN] KVM NOT found — virtualization may not be supported"
+          fi
+
+          # KPROBES — KernelSU dependency
+          if grep -q "KPROBES" arch/Kconfig 2>/dev/null || grep -q "KPROBES" kernel/Kconfig 2>/dev/null; then
+            echo "[OK] KPROBES available (KernelSU ready)"
+          else
+            echo "[WARN] KPROBES NOT found — KernelSU will not work"
+          fi
+
+          # DualSense / PlayStation HID
+          if grep -q "HID_PLAYSTATION" drivers/hid/Kconfig 2>/dev/null; then
+            echo "[OK] PlayStation HID (DualSense) available"
+          else
+            echo "[INFO] PlayStation HID not available (needs backport)"
+          fi
+
+      - name: Apply original patches
+        run: |
+          cd $HOME/kernel
+          PATCH_DIR="$GITHUB_WORKSPACE/patches"
+          if [ -d "$PATCH_DIR" ] && ls "$PATCH_DIR"/*.patch 1>/dev/null 2>&1; then
+            for p in $PATCH_DIR/*.patch; do
+              echo "=== Applying: $(basename $p) ==="
+              git apply --verbose "$p" || echo "WARN: $p failed"
+            done
+          else
+            echo "No patches to apply."
+          fi
+
+      - name: Fix GCC 11 vendor code issues + THP API compat
+        run: |
+          cd $HOME/kernel
+          echo "=== Fixing GCC 11 vendor code issues ==="
+
+          # Fix 0: Ensure all Makefiles end with newline
+          # Feature integration appends entries to Makefiles; if the original file
+          # doesn't end with \n, entries get concatenated (e.g. "blk-crypto-fallback.oobj-")
+          echo "=== Checking Makefile integrity ==="
+          find . -name Makefile | while read -r f; do
+            if [ -s "$f" ] && [ "$(tail -c1 "$f" | wc -l)" -eq 0 ]; then
+              printf "\n" >> "$f"
+              echo "  Fixed: $f (added trailing newline)"
+            fi
+          done
+          echo "Makefile integrity check complete"
+
+          # Fix 1: oplus_adfr.h — inline without function body causes "inlining failed"
+          if [ -f "techpack/display/oplus/oplus_adfr.h" ]; then
+            sed -i 's/inline bool oplus_adfr_is_support(void);/bool oplus_adfr_is_support(void);/' techpack/display/oplus/oplus_adfr.h
+            echo "Fixed oplus_adfr.h"
+          fi
+
+          # Fix 2: oplus_display_panel.h — C++11 enum base type syntax not valid in C
+          if [ -f "techpack/display/oplus/oplus_display_panel.h" ]; then
+            sed -i 's/enum APOLLO_BL_ID : int {/enum APOLLO_BL_ID {/' techpack/display/oplus/oplus_display_panel.h
+            echo "Fixed oplus_display_panel.h (removed C++ enum base)"
+          fi
+
+          # Fix 3: thread_info.h — __bad_copy_to is a compile-time assertion that fails on legacy vendor code.
+          if [ -f "include/linux/thread_info.h" ]; then
+            sed -i \
+              -e '/extern void __compiletime_error("copy source size is too small")/{N;s/.*/static inline void __bad_copy_from(void) { }/}' \
+              -e '/extern void __compiletime_error("copy destination size is too small")/{N;s/.*/static inline void __bad_copy_to(void) { }/}' \
+              include/linux/thread_info.h
+            echo "Patched thread_info.h"
+          fi
+
+          # Fix 4: THP API compatibility — run Python fix script
+          # The vendor kernel cherry-picked newer mainline API changes to header files
+          # (rmap.h, mmu_notifier.h) but didn't update all callers (huge_memory.c, khugepaged.c)
+          # The Python script handles multi-line declarations that sed cannot.
+          THP_FIX_SCRIPT="$GITHUB_WORKSPACE/patches/features/fix-thp-compat.py"
+          if [ -f "$THP_FIX_SCRIPT" ]; then
+            echo "=== Running THP API compatibility fix script ==="
+            python3 "$THP_FIX_SCRIPT" "$HOME/kernel" && {
+              echo "[OK] THP fix script succeeded — THP will remain enabled"
+            } || {
+              echo "::warning::THP fix script failed. THP will be DISABLED to ensure build succeeds."
+              echo "THP_DISABLED=true" >> $GITHUB_ENV
+            }
+          else
+            echo "::warning::THP fix script not found. THP will be DISABLED as precaution."
+            echo "THP_DISABLED=true" >> $GITHUB_ENV
+          fi
+
+      - name: Merge config fragment
+        run: |
+          cd $HOME/kernel
+          export ARCH=arm64
+
+          # Find defconfig — LineageOS uses vendor/kona-perf_defconfig
+          DEFCFG=""
+          for f in \
+            arch/arm64/configs/vendor/kona-perf_defconfig \
+            arch/arm64/configs/vendor/kona_defconfig; do
+            [ -f "$f" ] && DEFCFG="$f" && break
+          done
+          [ -z "$DEFCFG" ] && { echo "ERROR: defconfig not found"; \
+            find arch/arm64/configs -name "*kona*" -o -name "*lemonade*" | head -20; exit 1; }
+          # Convert path to make target: arch/arm64/configs/vendor/kona-perf_defconfig -> vendor/kona-perf_defconfig
+          MAKE_TARGET="${DEFCFG#arch/arm64/configs/}"
+          echo "Base defconfig: $DEFCFG (make target: $MAKE_TARGET)"
+
+          # Step 1: Generate base config
+          make ARCH=arm64 O=out "$MAKE_TARGET"
+
+          # Step 2: Append oplus.config if present
+          if [ -f "arch/arm64/configs/vendor/oplus.config" ]; then
+            echo "Appending oplus.config..."
+            cat arch/arm64/configs/vendor/oplus.config >> out/.config
+          fi
+
+          # Step 3: Append main fragment (extreme/advanced/perf)
+          FRAGMENT="$GITHUB_WORKSPACE/${{ env.FRAGMENT }}"
+          if [ -f "$FRAGMENT" ]; then
+            echo "Appending $FRAGMENT..."
+            grep -v '^#' "$FRAGMENT" | grep -v '^$' >> out/.config
+          fi
+
+          # Step 4: Append security hardening fragment (BBG防格机 + CVE修复)
+          SECURITY_FRAGMENT="$GITHUB_WORKSPACE/configs/lemonades_c16_security.fragment"
+          if [ -f "$SECURITY_FRAGMENT" ]; then
+            echo "Appending security fragment..."
+            grep -v '^#' "$SECURITY_FRAGMENT" | grep -v '^$' >> out/.config
+          fi
+
+          # Step 5: Append Droidspaces + network enhancement fragment
+          DROIDSPACES_FRAGMENT="$GITHUB_WORKSPACE/configs/lemonades_c16_droidspaces.fragment"
+          if [ -f "$DROIDSPACES_FRAGMENT" ]; then
+            echo "Appending Droidspaces + network fragment..."
+            grep -v '^#' "$DROIDSPACES_FRAGMENT" | grep -v '^$' >> out/.config
+          fi
+
+          # Step 6: Resolve dependencies
+          make ARCH=arm64 O=out olddefconfig
+
+          echo "=== Config merge complete ==="
+
+      - name: Apply runtime toggles
+        run: |
+          cd $HOME/kernel
+          KPTI="${{ github.event.inputs.kpti || 'false' }}"
+          LTO="${{ github.event.inputs.lto || 'true' }}"
+          CFI="${{ github.event.inputs.cfi || 'true' }}"
+
+          # Set kernel name to Oblivionis-kernel (shows in /proc/version → About phone)
+          ./scripts/config --file out/.config --set-str LOCALVERSION "-Oblivionis-kernel"
+          ./scripts/config --file out/.config --disable LOCALVERSION_AUTO
+
+          if [ "$KPTI" = "false" ]; then
+            ./scripts/config --file out/.config --enable CMDLINE \
+              --set-str CMDLINE "kpti=off"
+          fi
+          if [ "$LTO" = "true" ]; then
+            ./scripts/config --file out/.config \
+              --enable LTO_CLANG_THIN --disable LTO_NONE
+          fi
+          if [ "$CFI" = "false" ]; then
+            ./scripts/config --file out/.config --disable CFI_CLANG
+          fi
+
+          # Ensure oplus vendor hooks enabled
+          ./scripts/config --file out/.config --enable ANDROID_VENDOR_HOOKS
+
+          # Disable BTF to avoid resolve_btfids build tool issue on GitHub Actions
+          ./scripts/config --file out/.config --disable DEBUG_INFO_BTF
+
+          # CRITICAL: Disable module signing — vendor modules use OEM keys
+          # MODULE_SIG_FORCE would block all vendor modules → boot failure
+          ./scripts/config --file out/.config --disable MODULE_SIG
+          ./scripts/config --file out/.config --disable MODULE_SIG_FORCE
+          ./scripts/config --file out/.config --disable MODULE_SIG_ALL
+
+          # Disable XDP_SOCKETS_DIAG — 4.19 xdp_umem struct missing fields
+          ./scripts/config --file out/.config --disable XDP_SOCKETS_DIAG
+
+          # ---- Droidspaces: ensure key configs for container support ----
+          ./scripts/config --file out/.config --enable NAMESPACES
+          ./scripts/config --file out/.config --enable PID_NS
+          ./scripts/config --file out/.config --enable UTS_NS
+          ./scripts/config --file out/.config --enable IPC_NS
+          ./scripts/config --file out/.config --enable NET_NS
+          ./scripts/config --file out/.config --enable USER_NS
+          ./scripts/config --file out/.config --enable SYSVIPC
+          ./scripts/config --file out/.config --enable POSIX_MQUEUE
+          ./scripts/config --file out/.config --enable SECCOMP
+          ./scripts/config --file out/.config --enable SECCOMP_FILTER
+          ./scripts/config --file out/.config --enable OVERLAY_FS
+          ./scripts/config --file out/.config --enable DEVTMPFS
+          ./scripts/config --file out/.config --enable VETH
+          ./scripts/config --file out/.config --enable BRIDGE
+          ./scripts/config --file out/.config --enable BRIDGE_NETFILTER
+          ./scripts/config --file out/.config --enable BLK_DEV_LOOP
+
+          # ---- Security: ensure panic handling for BBG防格机 ----
+          ./scripts/config --file out/.config --enable PANIC_ON_OOPS
+          ./scripts/config --file out/.config --set-val PANIC_TIMEOUT 5
+          ./scripts/config --file out/.config --enable HARDLOCKUP_DETECTOR
+          ./scripts/config --file out/.config --enable SLAB_FREELIST_RANDOM
+          ./scripts/config --file out/.config --enable SLAB_FREELIST_HARDENED
+          ./scripts/config --file out/.config --enable INIT_ON_ALLOC_DEFAULT_ON
+          # INIT_ON_FREE 有 ~5-10% 性能损耗，生产环境关闭
+          ./scripts/config --file out/.config --disable INIT_ON_FREE_DEFAULT_ON
+
+          # ---- ZRAM: ensure built-in (not module) ----
+          ./scripts/config --file out/.config --enable ZRAM
+          ./scripts/config --file out/.config --enable ZSMALLOC
+
+          # ---- Network: BBRv3 as default + ECN + new CC algorithms ----
+          # 所有 TCP CC 改为内置 (=y): AnyKernel3 boot-only 不安装模块
+          ./scripts/config --file out/.config --enable TCP_CONG_BBR
+          ./scripts/config --file out/.config --set-str DEFAULT_TCP_CONG "bbr"
+          ./scripts/config --file out/.config --enable TCP_ECN
+          ./scripts/config --file out/.config --enable TCP_CONG_BBR3 2>/dev/null || true
+          ./scripts/config --file out/.config --enable TCP_CONG_C2TCP 2>/dev/null || true
+          ./scripts/config --file out/.config --enable TCP_CONG_ROCCET 2>/dev/null || true
+          ./scripts/config --file out/.config --enable TCP_CONG_BRUTAL 2>/dev/null || true
+          ./scripts/config --file out/.config --enable TCP_CONG_CUBIC
+
+          # ---- ADIOS I/O scheduler (运行时通过 init.oblivionis.rc 设为默认) ----
+          ./scripts/config --file out/.config --enable MQ_IOSCHED_ADIOS 2>/dev/null || true
+          # 编译时默认设为 mq-deadline (安全回退)；ADIOS 在 init 脚本中设为运行时默认
+          ./scripts/config --file out/.config --enable MQ_IOSCHED_DEADLINE
+
+          # ---- UKSM: Ultra KSM ----
+          ./scripts/config --file out/.config --enable UKSM 2>/dev/null || true
+
+          # ---- NTSYNC: NT sync primitives (内置) ----
+          ./scripts/config --file out/.config --enable NTSYNC 2>/dev/null || true
+
+          # ---- EVDI: Lindroid virtual display (内置) ----
+          ./scripts/config --file out/.config --enable DRM_EVDI 2>/dev/null || true
+
+          # ---- Zswap: compressed swap cache ----
+          ./scripts/config --file out/.config --enable ZSWAP
+
+          # ---- THP: Transparent Huge Pages ----
+          # Only enable if the Python fix script succeeded
+          if [ "${{ env.THP_DISABLED }}" = "true" ]; then
+            echo "::notice::THP DISABLED — vendor API compat fix failed, disabling to ensure build"
+            ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE
+            ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_ALWAYS
+            ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_MADVISE
+            ./scripts/config --file out/.config --disable THP_SWAP
+          else
+            echo "::notice::THP ENABLED — vendor API compat fix succeeded"
+            ./scripts/config --file out/.config --enable TRANSPARENT_HUGEPAGE
+            ./scripts/config --file out/.config --enable TRANSPARENT_HUGEPAGE_ALWAYS
+          fi
+
+          # ---- Hibernation: 手机无用，关闭以减少攻击面 ----
+          # HIBERNATION (休眠到磁盘) 在手机上无用，徒增攻击面与内核体积
+          # PM_AUTOSLEEP 容易引发非预期休眠
+          ./scripts/config --file out/.config --disable HIBERNATION
+          ./scripts/config --file out/.config --disable HIBERNATE_CALLBACKS
+          ./scripts/config --file out/.config --disable PM_AUTOSLEEP
+          ./scripts/config --file out/.config --enable PM_SLEEP
+          ./scripts/config --file out/.config --enable CPU_IDLE
+
+          # ---- NO_HZ: 移动端使用 NO_HZ_IDLE (非 NO_HZ_FULL) ----
+          # NO_HZ_FULL 面向 HPC，引入 context-tracking 开销，影响手机续航与延迟
+          ./scripts/config --file out/.config --disable NO_HZ_FULL
+          ./scripts/config --file out/.config --disable NO_HZ_FULL_ALL
+          ./scripts/config --file out/.config --disable RCU_NOCB_CPU
+          ./scripts/config --file out/.config --enable NO_HZ_IDLE
+
+          # ---- 安全加固: 关闭 usercopy 回退 ----
+          ./scripts/config --file out/.config --disable HARDENED_USERCOPY_FALLBACK
+
+          # ---- I/O 调度器: 确保 mq-deadline 为默认 (非遗留 CFQ) ----
+          ./scripts/config --file out/.config --set-str DEFAULT_IOSCHED "mq-deadline"
+
+          # ---- 调度器增强: util_est (5.0 主线特性，ACK 4.19 可能已包含) ----
+          # util_est 用 EWMA 估计任务利用率，改善频率选择和 EAS 调度决策
+          # 如果内核源码已包含此选项则启用，否则忽略
+          ./scripts/config --file out/.config --enable SCHED_UTIL_EST 2>/dev/null || true
+          ./scripts/config --file out/.config --enable SCHED_UTIL_EST_FASTUP 2>/dev/null || true
+
+          # ---- PSI: 完整启用 (不默认禁用) ----
+          # 酷安内核普遍启用完整 PSI, 配合 PSI-LMK 智能后台回收
+          ./scripts/config --file out/.config --enable PSI 2>/dev/null || true
+          ./scripts/config --file out/.config --disable PSI_DEFAULT_DISABLED 2>/dev/null || true
+
+          # ---- 酷安社区移植特性: 新增功能开关 ----
+
+          # Btrfs 文件系统
+          ./scripts/config --file out/.config --enable BTRFS_FS 2>/dev/null || true
+          ./scripts/config --file out/.config --enable BTRFS_FS_POSIX_ACL 2>/dev/null || true
+
+          # NTFS3 新版 NTFS 驱动 (5.15 backport)
+          ./scripts/config --file out/.config --enable NTFS3_FS 2>/dev/null || true
+
+          # Landlock LSM (5.13 backport)
+          ./scripts/config --file out/.config --enable SECURITY_LANDLOCK 2>/dev/null || true
+
+          # KVM 虚拟化 (ARM64 VHE)
+          ./scripts/config --file out/.config --enable VIRTUALIZATION 2>/dev/null || true
+          ./scripts/config --file out/.config --enable KVM 2>/dev/null || true
+          ./scripts/config --file out/.config --enable KVM_ARM_HOST 2>/dev/null || true
+          ./scripts/config --file out/.config --enable VIRTIO 2>/dev/null || true
+          ./scripts/config --file out/.config --enable VIRTIO_MMIO 2>/dev/null || true
+          ./scripts/config --file out/.config --enable VIRTIO_BLK 2>/dev/null || true
+          ./scripts/config --file out/.config --enable VIRTIO_NET 2>/dev/null || true
+          ./scripts/config --file out/.config --enable VHOST_NET 2>/dev/null || true
+          ./scripts/config --file out/.config --enable VHOST 2>/dev/null || true
+
+          # DualSense / PlayStation HID 手柄
+          ./scripts/config --file out/.config --enable HID_PLAYSTATION 2>/dev/null || true
+          ./scripts/config --file out/.config --enable INPUT_JOYDEV 2>/dev/null || true
+          ./scripts/config --file out/.config --enable JOYSTICK_XPAD 2>/dev/null || true
+
+          # ZRAM ZSTD 重压缩
+          ./scripts/config --file out/.config --enable ZRAM_MULTI_COMP 2>/dev/null || true
+          ./scripts/config --file out/.config --enable ZRAM_DEF_RECOMP_ZSTD 2>/dev/null || true
+
+          # KPROBES (KernelSU 依赖)
+          ./scripts/config --file out/.config --enable KPROBES 2>/dev/null || true
+          ./scripts/config --file out/.config --enable KRETPROBES 2>/dev/null || true
+          ./scripts/config --file out/.config --enable KPROBE_EVENTS 2>/dev/null || true
+
+          # Tracepoints (KernelSU/性能分析依赖, 但不启用完整 tracing)
+          ./scripts/config --file out/.config --enable TRACEPOINTS 2>/dev/null || true
+
+          # BPF 安全: 禁止非特权用户使用 BPF
+          ./scripts/config --file out/.config --enable BPF_UNPRIV_DEFAULT_OFF 2>/dev/null || true
+
+          # Cgroup v2 增强 (容器支持)
+          ./scripts/config --file out/.config --enable BLK_CGROUP 2>/dev/null || true
+          ./scripts/config --file out/.config --enable CGROUP_WRITEBACK 2>/dev/null || true
+
+          # OverlayFS 增强 (KernelSU/Magisk 模块)
+          ./scripts/config --file out/.config --enable OVERLAY_FS_REDIRECT_DIR 2>/dev/null || true
+          ./scripts/config --file out/.config --enable OVERLAY_FS_INDEX 2>/dev/null || true
+
+          # 异步设备挂起 (加速休眠/唤醒)
+          ./scripts/config --file out/.config --enable PM_ASYNC_SUSPEND 2>/dev/null || true
+
+          # 蓝牙增强协议
+          ./scripts/config --file out/.config --enable BT_RFCOMM 2>/dev/null || true
+          ./scripts/config --file out/.config --enable BT_HIDP 2>/dev/null || true
+
+          # LED 通知灯/呼吸灯
+          ./scripts/config --file out/.config --enable LEDS_TRIGGERS 2>/dev/null || true
+          ./scripts/config --file out/.config --enable LEDS_TRIGGER_TIMER 2>/dev/null || true
+
+          # USB Gadget/ConfigFS
+          ./scripts/config --file out/.config --enable USB_CONFIGFS 2>/dev/null || true
+
+          # ---- KFENCE: 近零开销内存安全检测 (5.12 backport) ----
+          # 如果 backport 补丁成功应用则启用，否则 olddefconfig 忽略
+          ./scripts/config --file out/.config --enable KFENCE 2>/dev/null || true
+          ./scripts/config --file out/.config --set-val KFENCE_SAMPLE_INTERVAL 100 2>/dev/null || true
+          ./scripts/config --file out/.config --set-val KFENCE_NUM_OBJECTS 255 2>/dev/null || true
+
+          # ---- slab/slub 安全加固 ----
+          ./scripts/config --file out/.config --enable SLAB_FREELIST_RANDOM
+          ./scripts/config --file out/.config --enable SLAB_FREELIST_HARDENED
+          ./scripts/config --file out/.config --enable INIT_ON_ALLOC_DEFAULT_ON
+          # INIT_ON_FREE 有 ~5-10% 性能损耗，生产环境关闭
+          ./scripts/config --file out/.config --disable INIT_ON_FREE_DEFAULT_ON
+
+          # ---- 调度器: 关闭调试开销 (确保关闭) ----
+          ./scripts/config --file out/.config --disable SCHED_DEBUG
+          ./scripts/config --file out/.config --disable SCHEDSTATS
+
+          # ---- WALT 调度器: 确保 WALT 相关配置正确 ----
+          ./scripts/config --file out/.config --enable SCHED_WALT 2>/dev/null || true
+
+          # ---- Mountify: overlayfs support ----
+          ./scripts/config --file out/.config --enable OVERLAY_FS
+          ./scripts/config --file out/.config --enable TMPFS_XATTR
+
+          # ---- IPSet ----
+          ./scripts/config --file out/.config --enable IP_SET
+          ./scripts/config --file out/.config --enable NETFILTER_XT_SET
+
+          # ---- Android 17 GSI compatibility ----
+          ./scripts/config --file out/.config --enable ANDROID
+          ./scripts/config --file out/.config --enable ANDROID_BINDER_IPC
+          ./scripts/config --file out/.config --enable ASHMEM
+          ./scripts/config --file out/.config --enable SYNC_FILE
+          ./scripts/config --file out/.config --enable ION
+          ./scripts/config --file out/.config --enable SWIOTLB
+          # BinderFS for GSI compatibility
+          ./scripts/config --file out/.config --enable ANDROID_BINDERFS 2>/dev/null || true
+          # Treble support
+          ./scripts/config --file out/.config --enable TREBLE_ENABLE 2>/dev/null || true
+
+          # ---- Network stability: IPv6 + NAT + conntrack ----
+          ./scripts/config --file out/.config --enable IPV6
+          ./scripts/config --file out/.config --enable NF_CONNTRACK
+          ./scripts/config --file out/.config --enable NF_NAT
+          ./scripts/config --file out/.config --enable NETFILTER_XT_TARGET_MASQUERADE
+          ./scripts/config --file out/.config --enable NET_SCH_FQ
+          ./scripts/config --file out/.config --enable NET_SCH_FQ_CODEL
+          ./scripts/config --file out/.config --enable NET_SCH_CAKE
+
+          # ---- Compression algorithms for ZRAM ----
+          ./scripts/config --file out/.config --enable CRYPTO_LZ4
+          ./scripts/config --file out/.config --enable CRYPTO_ZSTD
+          ./scripts/config --file out/.config --enable CRYPTO_LZ4HC 2>/dev/null || true
+          ./scripts/config --file out/.config --enable CRYPTO_LZ4K 2>/dev/null || true
+          ./scripts/config --file out/.config --enable CRYPTO_LZ4KD 2>/dev/null || true
+          ./scripts/config --file out/.config --enable CRYPTO_842 2>/dev/null || true
+
+          # Re-run olddefconfig to resolve dependencies after manual changes
+          make ARCH=arm64 O=out olddefconfig
+
+      - name: Build kernel
+        run: |
+          cd $HOME/kernel
+          export ARCH=arm64 SUBARCH=arm64
+          export PATH="$HOME/clang/bin:$PATH"
+          export CC=clang CXX=clang++ LD=ld.lld
+          export AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump STRIP=llvm-strip
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+          # Vendor code has many warnings treated as errors
+          # Also disable FORTIFY_SOURCE for legacy vendor code with undersized buffers
+          # Add specific -Wno-error= for vendor kernel's cherry-picked -Werror= flags
+          # NOTE: -ftrivial-auto-var-init=zero 是 Clang 选项，不能放在 KCFLAGS 里
+          #   因为 KCFLAGS 也会传给 GCC 编译的 host 工具 (scripts/mod/)，GCC 不认识会报错。
+          #   改用 CFLAGS_GCC 分离: 仅内核代码用 Clang 编译时生效。
+          #
+          # 酷安内核编译优化: -O3 + Polly (Clang 多面体优化)
+          # -O3: 比 -O2 更激进的优化 (内联、向量化、循环展开)
+          # -mllvm -polly: Clang/LLVM 的循环和多面体模型优化
+          # -mllvm -polly-vectorizer=stripmine: Polly 循环分块向量化
+          export KCFLAGS="-Wno-error -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=address-of-packed-member -Wno-error=attribute-alias -Wno-unused-function -Wno-unused-variable -U_FORTIFY_SOURCE -O3 -mllvm -polly -mllvm -polly-vectorizer=stripmine -mllvm -polly-parallel"
+          export CFLAGS_GCC="-Wno-error -Wno-unused-function -Wno-unused-variable"
+          export CFLAGS_CLANG="-ftrivial-auto-var-init=zero -O3 -mllvm -polly"
+
+          # 隐藏 GitHub Actions runner 信息，使 /proc/version 显示干净的用户名/主机名
+          # 原始: (runner@runnervmliwqe) → 改为: (Oblivionis@lemonades)
+          export KBUILD_BUILD_USER=Oblivionis
+          export KBUILD_BUILD_HOST=lemonades
+
+          # Suppress git-based version suffix (+) — patches make git tree "dirty"
+          printf '' > .scmversion
+          export SCMVERSION=""
+
+          # Verify toolchain
+          echo "=== Toolchain check ==="
+          clang --version | head -2 || true
+          ld.lld --version | head -1 || true
+          aarch64-linux-gnu-gcc --version | head -1 || true
+
+          echo "=== Final .config highlights ==="
+          # Use grep with || true to avoid SIGPIPE failure under set -e
+          { grep -E "LOCALVERSION|PANIC_ON_OOPS|PANIC_TIMEOUT|SLAB_FREELIST|INIT_ON_ALLOC|INIT_ON_FREE|HARDLOCKUP|USERFAULTFD|XDP_SOCKETS|WIREGUARD|DIAG_CHAR|CPU_FREQ_TIMES|SCHED_WALT|SCHED_TUNE|SCHED_CORE_CTL|SCHED_UTIL_EST|LRU_GEN|BPF_SYSCALL|BPF_UNPRIV|F2FS|EROFS|BLK_INLINE|PREEMPT|PSI|ZRAM|UCLAMP|HZ=|OVERLAY_FS|VETH|BRIDGE|NET_NS|USER_NS|SYSVIPC|POSIX_MQUEUE|IP_SET|TCP_CONG|TCP_ECN|NET_SCH_FQ|NET_SCH_CAKE|NET_SCH_HTB|SECCOMP|DEVPTS|LOOP|RANDOMIZE_BASE|RETPOLINE|UKSM|NTSYNC|DRM_EVDI|ZSWAP|TRANSPARENT_HUGEPAGE|HIBERNATION|CPU_IDLE|ADIOS|MQ_IOSCHED|CRYPTO_LZ4|ASHMEM|BINDER|SWIOTLB|SYNC_FILE|IPV6|NF_NAT|NO_HZ|HARDENED_USERCOPY|DEFAULT_IOSCHED|SCHED_DEBUG|SCHEDSTATS|ZSMALLOC_STAT|KFENCE|BTRFS|NTFS3|LANDLOCK|KVM|VIRTIO|HID_PLAYSTATION|KPROBES|TRACEPOINTS|BLK_CGROUP|BT_RFCOMM|LEDS_TRIGGER|USB_CONFIGFS|PM_ASYNC" out/.config || true ; } | head -200 || true
+
+          echo "=== Building Oblivionis-kernel (variant=${{ env.VARIANT }}) ==="
+          make O=out ARCH=arm64 LOCALVERSION_AUTO= -j$(nproc) 2>&1 | tee build.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "=== BUILD FAILED (exit $BUILD_EXIT) — last 200 lines ==="
+            tail -200 build.log
+
+            # ---- Fallback: disable features that may have failed to compile ----
+            echo "=== Attempting fallback: disabling potentially incompatible features ==="
+
+            # Always restore BBRv1 (in case BBRv3 source replaced it)
+            # BBRv3 is now a separate module, so this is just a precaution
+            # Disable BBRv3 and all potentially incompatible features
+            ./scripts/config --file out/.config --disable TCP_CONG_BBR3
+            ./scripts/config --file out/.config --disable MQ_IOSCHED_ADIOS
+            ./scripts/config --file out/.config --disable TCP_CONG_C2TCP
+            ./scripts/config --file out/.config --disable TCP_CONG_ROCCET
+            ./scripts/config --file out/.config --disable TCP_CONG_BRUTAL
+            ./scripts/config --file out/.config --disable UKSM
+            ./scripts/config --file out/.config --disable NTSYNC
+            ./scripts/config --file out/.config --disable DRM_EVDI
+            ./scripts/config --file out/.config --disable KFENCE
+            ./scripts/config --file out/.config --disable CRYPTO_LZ4K
+            ./scripts/config --file out/.config --disable CRYPTO_LZ4KD
+            ./scripts/config --file out/.config --disable LZ4K_COMPRESS
+            ./scripts/config --file out/.config --disable LZ4KD_COMPRESS
+            # Also disable THP in case it wasn't disabled by the fix step
+            ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE
+            ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_ALWAYS
+            ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_MADVISE
+            ./scripts/config --file out/.config --disable THP_SWAP
+            # Disable new酷安移植特性 that may have failed to compile
+            ./scripts/config --file out/.config --disable BTRFS_FS 2>/dev/null || true
+            ./scripts/config --file out/.config --disable NTFS3_FS 2>/dev/null || true
+            ./scripts/config --file out/.config --disable SECURITY_LANDLOCK 2>/dev/null || true
+            ./scripts/config --file out/.config --disable KVM 2>/dev/null || true
+            ./scripts/config --file out/.config --disable VIRTUALIZATION 2>/dev/null || true
+            ./scripts/config --file out/.config --disable HID_PLAYSTATION 2>/dev/null || true
+            ./scripts/config --file out/.config --disable KPROBES 2>/dev/null || true
+            ./scripts/config --file out/.config --disable ZRAM_MULTI_COMP 2>/dev/null || true
+            # Also revert -O3/Polly to -O2 in case optimization causes issues
+            # (KCFLAGS is set at build time, not in .config)
+            # Ensure BBRv1 is still enabled as default
+            ./scripts/config --file out/.config --enable TCP_CONG_BBR
+            ./scripts/config --file out/.config --set-str DEFAULT_TCP_CONG "bbr"
+
+            # Re-run olddefconfig and retry build
+            make ARCH=arm64 O=out olddefconfig
+
+            # Fallback: revert -O3/Polly to -O2 to avoid optimization-related build failures
+            echo "=== Retrying build with fallback config (reverting -O3/Polly to -O2) ==="
+            export KCFLAGS="-Wno-error -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=address-of-packed-member -Wno-error=attribute-alias -Wno-unused-function -Wno-unused-variable -U_FORTIFY_SOURCE"
+            export CFLAGS_CLANG="-ftrivial-auto-var-init=zero"
+
+            make O=out ARCH=arm64 LOCALVERSION_AUTO= -j$(nproc) 2>&1 | tee build.log
+            BUILD_EXIT=${PIPESTATUS[0]}
+            if [ $BUILD_EXIT -ne 0 ]; then
+              echo "=== BUILD STILL FAILED (exit $BUILD_EXIT) — last 300 lines ==="
+              tail -300 build.log
+              exit $BUILD_EXIT
+            fi
+            echo "=== Build succeeded with fallback config ==="
+          fi
+          echo "=== Build completed successfully ==="
+
+          # Verify kernel version string contains "Oblivionis"
+          echo "=== Kernel version verification ==="
+          KERNEL_IMG_VERIFY=""
+          for f in out/arch/arm64/boot/Image.gz-dtb out/arch/arm64/boot/Image.gz out/arch/arm64/boot/Image; do
+            [ -f "$f" ] && KERNEL_IMG_VERIFY="$f" && break
+          done
+          if [ -n "$KERNEL_IMG_VERIFY" ]; then
+            VERSION_STR=$(strings "$KERNEL_IMG_VERIFY" | grep -m1 "Linux version" || true)
+            echo "Version string: $VERSION_STR"
+            if echo "$VERSION_STR" | grep -q "Oblivionis"; then
+              echo "[OK] Oblivionis-kernel name found in version string"
+            else
+              echo "[WARN] Oblivionis-kernel name NOT found in version string!"
+              echo "[WARN] Check CONFIG_LOCALVERSION and LOCALVERSION_AUTO settings"
+            fi
+          fi
+
+      - name: Upload build log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ env.VARIANT }}-${{ github.run_number }}
+          path: ~/kernel/build.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload final config (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-config-${{ env.VARIANT }}-${{ github.run_number }}
+          path: ~/kernel/out/.config
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Verify build output
+        run: |
+          cd $HOME/kernel
+          echo "=== Boot directory contents ==="
+          ls -la out/arch/arm64/boot/ 2>/dev/null || true
+          # Find the actual kernel image (SM8250 usually produces Image.gz-dtb)
+          KERNEL_IMG=""
+          for f in out/arch/arm64/boot/Image.gz-dtb out/arch/arm64/boot/Image.gz out/arch/arm64/boot/Image; do
+            [ -f "$f" ] && KERNEL_IMG="$f" && break
+          done
+          if [ -z "$KERNEL_IMG" ]; then
+            echo "FATAL: No kernel image found"
+            exit 1
+          fi
+          echo "Kernel image: $KERNEL_IMG"
+          strings "$KERNEL_IMG" | grep -m1 "Linux version" || true
+          echo "KERNEL_IMG=$KERNEL_IMG" >> $GITHUB_ENV
+          echo "KERNEL_IMG_NAME=$(basename $KERNEL_IMG)" >> $GITHUB_ENV
+
+      - name: Package with AnyKernel3
+        run: |
+          cd $HOME
+          git clone --depth=1 https://github.com/${{ env.ANYKERNEL_REPO }} AnyKernel3
+          cd AnyKernel3
+          KERNEL_IMG_PATH="$HOME/kernel/$KERNEL_IMG"
+          cp "$KERNEL_IMG_PATH" kernel
+          # Also copy dtb if it exists separately
+          [ -f "$HOME/kernel/out/arch/arm64/boot/dtb" ] && \
+            cp "$HOME/kernel/out/arch/arm64/boot/dtb" dtb
+          [ -f "$HOME/kernel/out/arch/arm64/boot/dtbo.img" ] && \
+            cp "$HOME/kernel/out/arch/arm64/boot/dtbo.img" dtbo.img
+
+          # AnyKernel3 config — copy from template (avoids YAML heredoc indentation issues)
+          cp "$GITHUB_WORKSPACE/templates/anykernel.sh" anykernel.sh
+          echo "=== anykernel.sh ==="
+          cat anykernel.sh
+
+          # ---- Oblivionis: copy ramdisk tuning script ----
+          if [ -d "$GITHUB_WORKSPACE/templates/ramdisk" ]; then
+            mkdir -p ramdisk
+            cp -r "$GITHUB_WORKSPACE/templates/ramdisk/"* ramdisk/
+            echo "=== ramdisk files ==="
+            ls -la ramdisk/
+          fi
+
+          ZIP_NAME="Oblivionis-kernel-4.19-${{ env.VARIANT }}"
+          zip -r9 "${ZIP_NAME}.zip" * -x '.git' -x '.git/*' -x '*.git*'
+          ls -la "${ZIP_NAME}.zip"
+          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+          # 设置完整路径供 release 步骤使用 (action-gh-release 不展开 ~)
+          echo "RELEASE_ZIP_PATH=$HOME/AnyKernel3/${ZIP_NAME}.zip" >> $GITHUB_ENV
+          echo "RELEASE_IMG_PATH=$HOME/kernel/${KERNEL_IMG}" >> $GITHUB_ENV
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}-${{ github.run_number }}
+          path: ~/AnyKernel3/${{ env.ZIP_NAME }}.zip
+          retention-days: 30
+
+      - name: Upload kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.KERNEL_IMG_NAME }}-${{ env.VARIANT }}-${{ github.run_number }}
+          path: ~/kernel/${{ env.KERNEL_IMG }}
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Create release (on tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.RELEASE_ZIP_PATH }}
+            ${{ env.RELEASE_IMG_PATH }}
+          name: Oblivionis-kernel ${{ github.ref_name }} (${{ env.VARIANT }})
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,168 @@
+# ===================================================================
+# lemonades_c16_advanced.fragment
+# Original ADVANCED config fragment for OnePlus 9R (lemonades / SM8250)
+# Target: ColorOS 16 (Android 16) + mainline feature backports
+#
+# Builds on lemonades_c16_perf.fragment, adding:
+#   - PSI (Pressure Stall Information, 4.20 mainline) — easy backport
+#   - Clang CFI (Control Flow Integrity) — security hardening
+#   - KFENCE (lightweight memory error detection, 5.12)
+#   - fs-verity (5.4) — APK/file integrity
+#   - io_uring (5.1+) — async IO (if backported)
+#   - TCP BBR congestion control — network performance
+#   - TCP advanced congestion options
+#   - userfaultfd write-protect
+#   - Group identity / cgroup v2 enhancements
+#
+# NOT included (hardware incompatible with SM8250 / Cortex-A77):
+#   - PAC (needs ARMv8.3) — not supported
+#   - BTI (needs ARMv8.5) — not supported
+#   - MTE (needs ARMv8.5) — not supported
+#
+# NOT included (too hard to backport to 4.19, needs 5.x/6.x base):
+#   - sched_ext (needs 6.12 + BPF struct_ops 5.6)
+#   - PREEMPT_LAZY (needs 6.13)
+#   - MGLRU (needs 6.1 mm/ rework)
+#   - DAMON (needs 5.15)
+#   - folio (needs 6.1)
+# ===================================================================
+
+# ---- PSI: Pressure Stall Information (4.20, easy backport) ----
+CONFIG_PSI=y
+# Default PSI tracking: medium overhead, high value for Android lmkd
+CONFIG_PSI_DEFAULT_DISABLED=y  # enable at runtime via sysctl
+
+# ---- CFI: Clang Control Flow Integrity ----
+# Requires Clang toolchain (we use Proton Clang 17+)
+CONFIG_CFI_CLANG=y
+CONFIG_CFI_PERMISSIVE=y  # log only, don't panic (safer for first boot)
+# Note: CFI needs CONFIG_LTO_CLANG_THIN
+
+# ---- KFENCE: lightweight memory error detector (5.12) ----
+# If backported, enables probabilistic memory safety detection
+# CONFIG_KFENCE=y
+# CONFIG_KFENCE_SAMPLE_INTERVAL=100  # ms, 0 = disabled
+# CONFIG_KFENCE_NUM_OBJECTS=255
+
+# ---- fs-verity: file content integrity (5.4) ----
+# Used by Android for APK integrity verification
+CONFIG_FS_VERITY=y
+CONFIG_FS_VERITY_BUILTIN_SIGNATURES=y
+
+# ---- io_uring: async IO framework (5.1+) ----
+# Only if backported to 4.19; LineageOS may already include it
+CONFIG_IO_URING=y
+
+# ---- TCP congestion control: BBR + advanced options ----
+CONFIG_TCP_CONG_BBR=y
+CONFIG_DEFAULT_TCP_CONG="cubic"  # keep cubic as default, bbr opt-in
+CONFIG_TCP_MD5SIG=y
+CONFIG_INET_DIAG=y
+CONFIG_INET_TCP_DIAG=y
+
+# ---- Network performance: GRO/GSO offload ----
+CONFIG_NET_RX_BUSY_POLL=y
+CONFIG_BQL=y  # Byte Queue Limits
+
+# ---- userfaultfd write-protect ----
+CONFIG_USERFAULTFD=y
+
+# ---- cgroup v2 enhancements ----
+CONFIG_CGROUP_V2=y
+CONFIG_CGROUP_RDMA=y
+CONFIG_CGROUP_HUGETLB=y
+CONFIG_CGROUP_PERF=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_CGROUP_DEVICE=y
+CONFIG_CGROUP_CPUACCT=y
+CONFIG_CGROUP_BPF=y
+
+# ---- Group identity / sched features ----
+# SCHED_DEBUG/SCHEDSTATS 收集调度统计，拖慢运行且仅用于调试
+# CONFIG_SCHED_DEBUG is not set
+CONFIG_SCHED_INFO=y
+# CONFIG_SCHEDSTATS is not set
+
+# ---- CPU frequency advanced ----
+CONFIG_CPU_FREQ_STAT=y
+CONFIG_CPU_FREQ_TIMES=y
+CONFIG_CPU_FREQ_GOV_ONDEMAND=y  # fallback governor
+CONFIG_CPU_FREQ_GOV_INTERACTIVE=y  # oplus may use this
+
+# ---- Block IO improvements ----
+CONFIG_BLK_DEV_THROTTLING=y
+CONFIG_BLK_WBT=y  # writeback throttling
+CONFIG_BLK_WBT_MQ=y
+CONFIG_BLK_SED_OPAL=y
+
+# ---- Memory: zram with LZ4 ----
+CONFIG_ZRAM=y
+CONFIG_ZRAM_LZ4_COMPRESS=y
+CONFIG_ZRAM_WRITEBACK=y
+CONFIG_ZSMALLOC=y
+# ZSMALLOC_STAT 调试统计，生产环境关闭
+# CONFIG_ZSMALLOC_STAT is not set
+
+# ---- F2FS advanced features ----
+CONFIG_F2FS_FS=y
+CONFIG_F2FS_STAT_FS=y
+CONFIG_F2FS_FS_XATTR=y
+CONFIG_F2FS_FS_POSIX_ACL=y
+CONFIG_F2FS_FS_SECURITY=y
+CONFIG_F2FS_FS_ENCRYPTION=y
+CONFIG_F2FS_FS_COMPRESSION=y
+CONFIG_F2FS_FS_LZ4_COMPRESS=y
+CONFIG_F2FS_FS_ZSTD_COMPRESS=y
+
+# ---- EROFS advanced ----
+CONFIG_EROFS_FS=y
+CONFIG_EROFS_FS_XATTR=y
+CONFIG_EROFS_FS_ZIP=y
+CONFIG_EROFS_FS_LZ4HC=y
+
+# ---- dm-verity for system integrity ----
+CONFIG_DM_VERITY=y
+CONFIG_DM_VERITY_FEC=y
+CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG=y
+
+# ---- Watchdog for stability ----
+CONFIG_WATCHDOG=y
+CONFIG_WATCHDOG_NOWAYOUT=y
+CONFIG_QCOM_WATCHDOG=y
+CONFIG_SOFTLOCKUP_DETECTOR=y
+
+# ---- Thermal / power ----
+CONFIG_THERMAL=y
+CONFIG_THERMAL_WRITABLE_TRIPS=y
+CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y
+CONFIG_THERMAL_GOV_STEP_WISE=y
+CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
+CONFIG_CPU_THERMAL=y
+CONFIG_DEVFREQ_THERMAL=y
+CONFIG_CLOCK_THERMAL=y
+
+# ---- Power supply / charging ----
+CONFIG_POWER_SUPPLY=y
+CONFIG_CHARGER=y
+CONFIG_BATTERY_BMS=y
+
+# ---- DMA-BUF heaps (replaces ION on newer kernels) ----
+CONFIG_DMABUF_HEAPS=y
+CONFIG_DMABUF_HEAPS_SYSTEM=y
+CONFIG_DMABUF_HEAPS_CMA=y
+# Keep ION for compatibility with older vendor modules
+CONFIG_ION=y
+
+# ---- Module signing (security) ----
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+# NOTE: MODULE_SIG disabled — vendor modules use OEM keys, signing would block boot
+# CONFIG_MODULE_SIG is not set
+# CONFIG_MODULE_SIG_FORCE is not set
+# CONFIG_MODULE_SIG_ALL is not set
+
+# ---- Disable debug bloat ----
+# CONFIG_DEBUG_INFO is not set
+# CONFIG_KASAN is not set
+# CONFIG_KCOV is not set
+# CONFIG_DEBUG_KMEMLEAK is not set

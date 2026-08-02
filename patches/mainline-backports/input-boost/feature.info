@@ -1,0 +1,36 @@
+# Input Boost — 触摸触发 CPU 频率提升
+#
+# 特性: 触摸屏幕时自动提升 CPU 频率，减少首次帧延迟
+# 来源: Android vendor kernel 通用特性
+# 主线状态: 未合入主线，Android vendor 特有
+#
+# 核心原理:
+#   1. 监听 input 事件 (触摸屏、按键)
+#   2. 触摸时立即将 CPU 频率提升到指定水平
+#   3. 保持一段时间后恢复正常调度
+#   4. 与 schedutil governor 配合
+#
+# 实现方式:
+#   方式 A: 内核模块 (推荐)
+#     - 注册 input_handler 监听事件
+#     - 通过 cpufreq 接口提升频率
+#     - 可配置 boost 频率、持续时间、取消条件
+#
+#   方式 B: userspace (通过 sysfs)
+#     - libperfmgr 或 similar 守护进程
+#     - 监听 /dev/input 事件
+#     - 写 /sys/devices/system/cpu/cpufreq/policyX/scaling_min_freq
+#
+# 受影响文件:
+#   drivers/input/input-boost.c (新增)
+#   drivers/input/Kconfig
+#   drivers/input/Makefile
+#
+# backport 难度: 低-中等
+#   - 独立模块，不修改核心调度器
+#   - 需要适配 QCOM cpufreq-hw driver
+#
+# backport 价值: 高
+#   - 显著减少触摸响应延迟
+#   - 提升滑动流畅度
+#   - Android 设备标配功能

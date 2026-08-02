@@ -1,0 +1,45 @@
+# zram 6.6 backport — 主线 commit 参考
+#
+# 特性: zram 多压缩流与重压缩 (Multiple Compression Streams / Recompression)
+# 主线版本: 6.6
+# 作者: Sergey Senozhatsky
+# 补丁系列: [PATCHv2 0/8] zram: Support multiple compression streams
+#
+# 核心功能:
+#   - 支持 1 个主压缩算法 + 最多 3 个次级压缩算法
+#   - Huge 页重压缩: 主算法无法压缩的页面用次级算法(如 zstd)重新压缩
+#   - Idle 页重压缩: 冷页面用更高效算法重新压缩，减少内存占用
+#   - 新增 sysfs: recomp_algorithm (配置次级算法) / recompress (触发重压缩)
+#
+# 新增配置选项:
+#   CONFIG_ZRAM_MULTI_COMP — 启用多压缩流
+#   CONFIG_ZRAM_DEF_RECOMP_ZSTD — 默认次级算法 zstd
+#   依赖: CONFIG_ZRAM_TRACK_ENTRY_ACTIME (idle 页追踪)
+#
+# 受影响文件:
+#   drivers/block/zram/Kconfig
+#   drivers/block/zram/zcomp.c
+#   drivers/block/zram/zcomp.h
+#   drivers/block/zram/zram_drv.c
+#   drivers/block/zram/zram_drv.h
+#   Documentation/admin-guide/blockdev/zram.rst
+#   Documentation/ABI/testing/sysfs-block-zram
+#
+# 8 个补丁:
+#   1. zram: Preparation for multi-zcomp support
+#   2. zram: Add recompression algorithm sysfs knob
+#   3. zram: Factor out WB and non-WB zram read functions
+#   4. zram: Introduce recompress sysfs knob
+#   5. documentation: Add recompression documentation
+#   6. zram: Add recompression algorithm choice to Kconfig
+#   7. zram: Add recompress flag to read_block_state()
+#   8. zram: correct typos
+#
+# backport 难度:
+#   4.19 基线: 中等 (zram 代码差异较大，需适配 zcomp 接口)
+#   5.10 基线: 简单-中等 (5.10 zram 更接近 6.6)
+#
+# 价值: 高
+#   - zstd 重压缩可节省 15-30% zram 内存
+#   - Android lmkd 可受益于更精确的内存压力管理
+#   - Google 已在 Pixel 设备上使用此特性

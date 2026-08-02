@@ -1,0 +1,6 @@
+name: DAMON (Data Access MONitor)
+source: Linux 5.15 / 5.16
+description: Lightweight data access monitoring framework. DAMON_RECLAIM for proactive page reclaim, DAMON_LRU_SORT for LRU list optimization. Works well with MGLRU.
+config: CONFIG_DAMON=y, CONFIG_DAMON_RECLAIM=y, CONFIG_DAMON_LRU_SORT=y
+status: experimental
+baseline: 4.19
