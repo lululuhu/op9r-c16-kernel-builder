@@ -14,7 +14,7 @@
 #   - Droidspaces/Mountify/WireGuard/IPSet support
 #   - Android 17 AOSP GSI compatibility
 #   - Network stability enhancements for hotspot/tethering
-#   - 主线移植特性: Btrfs/NTFS3/Landlock/KVM/DualSense/ZSTD重压缩
+#   - 主线移植特性: Btrfs/NTFS3/Landlock/DualSense/ZSTD重压缩 (KVM因厂商bug已禁用)
 #   - -O3 + Polly 编译优化
 #   - 智能模式切换 (游戏/低电量/均衡/息屏) + I/O/网络模式联动
 #   - Windchill v3 (风驰) cpufreq 调速器 (HMBIRD SCX研究: top_task/复合队列/融合调频/帧感知)
@@ -820,10 +820,13 @@ jobs:
           # Landlock LSM (5.13 backport)
           ./scripts/config --file out/.config --enable SECURITY_LANDLOCK 2>/dev/null || true
 
-          # KVM 虚拟化 (ARM64 VHE)
-          ./scripts/config --file out/.config --enable VIRTUALIZATION 2>/dev/null || true
-          ./scripts/config --file out/.config --enable KVM 2>/dev/null || true
-          ./scripts/config --file out/.config --enable KVM_ARM_HOST 2>/dev/null || true
+          # KVM 虚拟化 — DISABLED: vendor kvm_main.c has API mismatches
+          # (kvm_unmap_hva_range too few args, follow_pte_pmd too many args)
+          # These are vendor kernel bugs, not caused by our features.
+          # KVM on phone is experimental; disabling avoids build failure.
+          ./scripts/config --file out/.config --disable KVM 2>/dev/null || true
+          ./scripts/config --file out/.config --disable KVM_ARM_HOST 2>/dev/null || true
+          # Keep VIRTIO framework (harmless, no compilation issues)
           ./scripts/config --file out/.config --enable VIRTIO 2>/dev/null || true
           ./scripts/config --file out/.config --enable VIRTIO_MMIO 2>/dev/null || true
           ./scripts/config --file out/.config --enable VIRTIO_BLK 2>/dev/null || true
@@ -892,6 +895,10 @@ jobs:
 
           # ---- WALT 调度器: 确保 WALT 相关配置正确 ----
           ./scripts/config --file out/.config --enable SCHED_WALT 2>/dev/null || true
+
+          # ---- Windchill (风驰) cpufreq 调速器 ----
+          # HMBIRD SCX 概念实现: top_task/复合队列/融合调频/帧感知/AFS/滞回降频
+          ./scripts/config --file out/.config --enable CPU_FREQ_GOV_WINDCHILL 2>/dev/null || true
 
           # ---- Mountify: overlayfs support ----
           ./scripts/config --file out/.config --enable OVERLAY_FS
@@ -979,7 +986,7 @@ jobs:
 
           echo "=== Final .config highlights ==="
           # Use grep with || true to avoid SIGPIPE failure under set -e
-          { grep -E "LOCALVERSION|PANIC_ON_OOPS|PANIC_TIMEOUT|SLAB_FREELIST|INIT_ON_ALLOC|INIT_ON_FREE|HARDLOCKUP|USERFAULTFD|XDP_SOCKETS|WIREGUARD|DIAG_CHAR|CPU_FREQ_TIMES|SCHED_WALT|SCHED_TUNE|SCHED_CORE_CTL|SCHED_UTIL_EST|LRU_GEN|BPF_SYSCALL|BPF_UNPRIV|F2FS|EROFS|BLK_INLINE|PREEMPT|PSI|ZRAM|UCLAMP|HZ=|OVERLAY_FS|VETH|BRIDGE|NET_NS|USER_NS|SYSVIPC|POSIX_MQUEUE|IP_SET|TCP_CONG|TCP_ECN|NET_SCH_FQ|NET_SCH_CAKE|NET_SCH_HTB|SECCOMP|DEVPTS|LOOP|RANDOMIZE_BASE|RETPOLINE|UKSM|NTSYNC|DRM_EVDI|ZSWAP|TRANSPARENT_HUGEPAGE|HIBERNATION|CPU_IDLE|ADIOS|MQ_IOSCHED|CRYPTO_LZ4|ASHMEM|BINDER|SWIOTLB|SYNC_FILE|IPV6|NF_NAT|NO_HZ|HARDENED_USERCOPY|DEFAULT_IOSCHED|SCHED_DEBUG|SCHEDSTATS|ZSMALLOC_STAT|KFENCE|BTRFS|NTFS3|LANDLOCK|KVM|VIRTIO|HID_PLAYSTATION|KPROBES|TRACEPOINTS|BLK_CGROUP|BT_RFCOMM|LEDS_TRIGGER|USB_CONFIGFS|PM_ASYNC" out/.config || true ; } | head -200 || true
+          { grep -E "LOCALVERSION|PANIC_ON_OOPS|PANIC_TIMEOUT|SLAB_FREELIST|INIT_ON_ALLOC|INIT_ON_FREE|HARDLOCKUP|USERFAULTFD|XDP_SOCKETS|WIREGUARD|DIAG_CHAR|CPU_FREQ_TIMES|SCHED_WALT|SCHED_TUNE|SCHED_CORE_CTL|SCHED_UTIL_EST|LRU_GEN|BPF_SYSCALL|BPF_UNPRIV|F2FS|EROFS|BLK_INLINE|PREEMPT|PSI|ZRAM|UCLAMP|HZ=|OVERLAY_FS|VETH|BRIDGE|NET_NS|USER_NS|SYSVIPC|POSIX_MQUEUE|IP_SET|TCP_CONG|TCP_ECN|NET_SCH_FQ|NET_SCH_CAKE|NET_SCH_HTB|SECCOMP|DEVPTS|LOOP|RANDOMIZE_BASE|RETPOLINE|UKSM|NTSYNC|DRM_EVDI|ZSWAP|TRANSPARENT_HUGEPAGE|HIBERNATION|CPU_IDLE|ADIOS|MQ_IOSCHED|CRYPTO_LZ4|ASHMEM|BINDER|SWIOTLB|SYNC_FILE|IPV6|NF_NAT|NO_HZ|HARDENED_USERCOPY|DEFAULT_IOSCHED|SCHED_DEBUG|SCHEDSTATS|ZSMALLOC_STAT|KFENCE|BTRFS|NTFS3|LANDLOCK|KVM|VIRTIO|HID_PLAYSTATION|KPROBES|TRACEPOINTS|BLK_CGROUP|BT_RFCOMM|LEDS_TRIGGER|USB_CONFIGFS|PM_ASYNC|WINDCHILL" out/.config || true ; } | head -200 || true
 
           echo "=== Building Oblivionis-kernel (variant=${{ env.VARIANT }}) ==="
           make O=out ARCH=arm64 LOCALVERSION_AUTO= -j$(nproc) 2>&1 | tee build.log
@@ -1001,6 +1008,9 @@ jobs:
             ./scripts/config --file out/.config --disable NFSD 2>/dev/null || true
             ./scripts/config --file out/.config --disable LOCKD 2>/dev/null || true
             ./scripts/config --file out/.config --disable SUNRPC 2>/dev/null || true
+            # Also disable KVM (vendor kvm_main.c API mismatch — unrelated to our features)
+            ./scripts/config --file out/.config --disable KVM 2>/dev/null || true
+            ./scripts/config --file out/.config --disable KVM_ARM_HOST 2>/dev/null || true
 
             # Re-run olddefconfig and retry build with same optimization flags
             make ARCH=arm64 O=out olddefconfig

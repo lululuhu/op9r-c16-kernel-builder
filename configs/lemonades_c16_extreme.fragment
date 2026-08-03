@@ -872,14 +872,13 @@ CONFIG_PSI=y
 # 取消默认禁用, 让 PSI 在启动时即生效
 # CONFIG_PSI_DEFAULT_DISABLED is not set
 
-# ---- KVM: 内核虚拟机支持 (ARM64) ----
-# 允许在手机上运行虚拟机 (配合 QEMU) 和 Docker 容器
-# 酷安多个内核已集成 KVM+virtio 用于 Docker/Kali Nethunter
-# 注: SM8250 (Cortex-A77) 支持 ARM VHE (Virtualization Host Extensions)
-CONFIG_VIRTUALIZATION=y
-CONFIG_KVM=y
-CONFIG_KVM_ARM_HOST=y
-# virtio 虚拟化驱动框架
+# ---- KVM: 已禁用 (厂商内核 API 不匹配) ----
+# 厂商 kvm_main.c 中 kvm_unmap_hva_range/follow_pte_pmd 函数参数与
+# ARM64 架构定义不匹配, 导致编译失败。这是厂商内核 bug, 非我们的特性导致。
+# KVM 在手机上为实验性功能, 禁用以避免编译失败。
+# CONFIG_KVM is not set
+# CONFIG_KVM_ARM_HOST is not set
+# virtio 虚拟化驱动框架 (保留, 无编译问题)
 CONFIG_VIRTIO=y
 CONFIG_VIRTIO_MMIO=y
 CONFIG_VIRTIO_BLK=y
