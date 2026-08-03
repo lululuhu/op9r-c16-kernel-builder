@@ -63,7 +63,9 @@ static inline struct brutal *brutal_ca(const struct sock *sk)
  */
 static struct proto tcp_prot_override;
 
-#ifdef _LINUX_SOCKPTR_H
+/* 4.19 厂商内核虽有 sockptr.h 但 proto->setsockopt 仍用 char __user *
+ * 5.8+ 才将 setsockopt 参数改为 sockptr_t */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
 static int brutal_set_rate(struct sock *sk, sockptr_t optval,
 			   unsigned int optlen)
 #else
@@ -77,7 +79,7 @@ static int brutal_set_rate(struct sock *sk, char __user *optval,
 	if (optlen < sizeof(rate))
 		return -EINVAL;
 
-#ifdef _LINUX_SOCKPTR_H
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
 	if (copy_from_sockptr(&rate, optval, sizeof(rate)))
 #else
 	if (copy_from_user(&rate, optval, sizeof(rate)))
@@ -88,7 +90,7 @@ static int brutal_set_rate(struct sock *sk, char __user *optval,
 	return 0;
 }
 
-#ifdef _LINUX_SOCKPTR_H
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
 static int brutal_tcp_setsockopt(struct sock *sk, int level, int optname,
 				 sockptr_t optval, unsigned int optlen)
 #else
