@@ -101,14 +101,20 @@ CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
 CONFIG_CPU_FREQ_GOV_POWERSAVE=y
 CONFIG_CPU_FREQ_GOV_ONDEMAND=y
 CONFIG_CPU_FREQ_GOV_INTERACTIVE=y
-# ---- Windchill (风驰) 调速器: 能量感知 + 快速响应 + 滞回降频 ----
-# 原创实现, 灵感来自一加风驰游戏内核概念
-# - EMA 负载跟踪: 指数移动平均平滑负载变化
-# - 快速升频: 负载突增时立即提升频率 (boost 窗口)
-# - 智能降频: 滞回机制防止频率震荡
-# - 甜点频率: 负载稳定时选择能效最优频率
+# ---- Windchill (风驰) 调速器 v3: HMBIRD SCX 深度研究实现 ----
+# 基于 GitHub WildKernels/kernel_patches fengchi 补丁 (19895行) 深度研究
+# 研究发现一加风驰内部代号 HMBIRD, 基于 Linux sched_ext (SCX) 框架
+# 4.19 内核不支持 sched_ext, 将 HMBIRD 核心概念融入 cpufreq governor:
+# - top_task: 渲染线程检测 (RenderThread/SurfaceFlinger) + 频率优先
+# - composite_queue: 加权队列深度 (前台3x/后台1x) + 渲染线程信号
+# - energy_aware: 功耗建模 + 能效甜点频率选择
+# - fusion_freq: CPU-GPU 负载联动 (一体化融合调频)
+# - frame_aware: 游戏场景检测 + 帧感知采样对齐
+# - AFS: 5级自适应升频 (参考 ZZMoove)
+# - hysteresis: 滞回降频 + 去抖防震荡
 # 可通过 sysfs /sys/devices/system/cpu/cpufreq/policyN/windchill/ 调参
 # 可通过 echo windchill > scaling_governor 切换到此调速器
+# task_stats 属性显示任务分类统计 (fg/bg/render/rt)
 CONFIG_CPU_FREQ_GOV_WINDCHILL=y
 CONFIG_CPU_FREQ_STAT=y
 CONFIG_CPU_FREQ_TIMES=y

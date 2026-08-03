@@ -17,7 +17,7 @@
 #   - 主线移植特性: Btrfs/NTFS3/Landlock/KVM/DualSense/ZSTD重压缩
 #   - -O3 + Polly 编译优化
 #   - 智能模式切换 (游戏/低电量/均衡/息屏) + I/O/网络模式联动
-#   - Windchill (风驰) cpufreq 调速器 (能量感知+快速响应+滞回降频)
+#   - Windchill v3 (风驰) cpufreq 调速器 (HMBIRD SCX研究: top_task/复合队列/融合调频/帧感知)
 #   - PSI完整启用 / KPROBES(KernelSU依赖) / BPF安全加固
 # Kernel name: Oblivionis-kernel (via CONFIG_LOCALVERSION)
 #
