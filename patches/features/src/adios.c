@@ -41,6 +41,30 @@
 #include <linux/sbitmap.h>
 #include <linux/sched/clock.h>
 
+/*
+ * 厂商 4.19 内核可能缺少 blk-mq-sched.h 中的辅助函数。
+ * 不依赖 blk_mq_sched_try_merge / blk_mq_sched_try_insert_merge /
+ * blk_mq_sched_request_inserted, 改用直接实现。
+ */
+static inline bool adios_bio_try_merge(struct request_queue *q,
+					struct bio *bio,
+					struct request **free)
+{
+	enum elv_merge type = elv_merge(q, bio, free);
+	return type != ELEVATOR_NO_MERGE;
+}
+
+static inline bool adios_try_insert_merge(struct request_queue *q,
+					   struct request *rq)
+{
+	return false;
+}
+
+static inline void adios_request_inserted(struct request *rq)
+{
+	/* no-op: blk_mq_sched_request_inserted 仅为 trace/restart 钩子 */
+}
+
 /* ---- 默认参数 ---- */
 /* 读请求最大等待时间(软超时)，以 jiffies 为单位 */
 static const int read_expire = HZ / 2;       /* 500ms */
@@ -484,7 +508,7 @@ static bool adios_bio_merge(struct blk_mq_hw_ctx *hctx, struct bio *bio)
 	bool ret;
 
 	spin_lock(&ad->lock);
-	ret = blk_mq_sched_try_merge(q, bio, &free);
+	ret = adios_bio_try_merge(q, bio, &free);
 	spin_unlock(&ad->lock);
 
 	if (free)
@@ -503,10 +527,10 @@ static void adios_insert_request(struct blk_mq_hw_ctx *hctx, struct request *rq,
 	struct adios_data *ad = q->elevator->elevator_data;
 	const int data_dir = rq_data_dir(rq);
 
-	if (blk_mq_sched_try_insert_merge(q, rq))
+	if (adios_try_insert_merge(q, rq))
 		return;
 
-	blk_mq_sched_request_inserted(rq);
+	adios_request_inserted(rq);
 
 	if (at_head || blk_rq_is_passthrough(rq)) {
 		/* passthrough 或 at_head: 直接进入 dispatch 队列(最高优先级) */

@@ -1411,27 +1411,21 @@ static ssize_t windchill_show_setspeed(struct cpufreq_policy *policy,
 	return sprintf(buf, "%u\n", wp->cur_freq);
 }
 
-static ssize_t windchill_store_setspeed(struct cpufreq_policy *policy,
-					const char *buf, size_t count)
+static int windchill_store_setspeed(struct cpufreq_policy *policy,
+				    unsigned int freq)
 {
 	struct windchill_policy *wp = windchill_policies[policy->cpu];
-	unsigned int val;
-	int ret;
 
 	if (!wp || !wp->enabled)
 		return -EINVAL;
 
-	ret = kstrtouint(buf, 10, &val);
-	if (ret)
-		return ret;
-
 	mutex_lock(&wp->mutex);
-	__cpufreq_driver_target(policy, val, CPUFREQ_RELATION_L);
-	wp->cur_freq = val;
-	wp->target_freq = val;
+	__cpufreq_driver_target(policy, freq, CPUFREQ_RELATION_L);
+	wp->cur_freq = freq;
+	wp->target_freq = freq;
 	mutex_unlock(&wp->mutex);
 
-	return count;
+	return 0;
 }
 
 /* ===================================================================
