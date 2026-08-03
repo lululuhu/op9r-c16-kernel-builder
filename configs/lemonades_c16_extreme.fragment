@@ -101,6 +101,15 @@ CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
 CONFIG_CPU_FREQ_GOV_POWERSAVE=y
 CONFIG_CPU_FREQ_GOV_ONDEMAND=y
 CONFIG_CPU_FREQ_GOV_INTERACTIVE=y
+# ---- Windchill (风驰) 调速器: 能量感知 + 快速响应 + 滞回降频 ----
+# 原创实现, 灵感来自一加风驰游戏内核概念
+# - EMA 负载跟踪: 指数移动平均平滑负载变化
+# - 快速升频: 负载突增时立即提升频率 (boost 窗口)
+# - 智能降频: 滞回机制防止频率震荡
+# - 甜点频率: 负载稳定时选择能效最优频率
+# 可通过 sysfs /sys/devices/system/cpu/cpufreq/policyN/windchill/ 调参
+# 可通过 echo windchill > scaling_governor 切换到此调速器
+CONFIG_CPU_FREQ_GOV_WINDCHILL=y
 CONFIG_CPU_FREQ_STAT=y
 CONFIG_CPU_FREQ_TIMES=y
 

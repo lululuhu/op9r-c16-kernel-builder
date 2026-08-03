@@ -285,6 +285,57 @@ KCONFIG_EOF
 }
 
 # ###################################################################
+# 特性 5b: Windchill CPU Frequency Governor (一加风驰调速器)
+# ###################################################################
+integrate_windchill() {
+    echo ""
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}  特性: Windchill 调速器 (风驰)${NC}"
+    echo -e "${BLUE}========================================${NC}"
+
+    local src="$SRC_DIR/cpufreq_windchill.c"
+    if [ ! -f "$src" ]; then
+        record_skipped "Windchill: 源码文件不存在"
+        return 0
+    fi
+
+    # 复制到 drivers/cpufreq/
+    cp "$src" drivers/cpufreq/cpufreq_windchill.c
+    info "  已复制 cpufreq_windchill.c 到 drivers/cpufreq/"
+
+    # 添加 Kconfig 条目
+    if ! grep -q "CPU_FREQ_GOV_WINDCHILL" drivers/cpufreq/Kconfig 2>/dev/null; then
+        cat >> drivers/cpufreq/Kconfig << 'KCONFIG_EOF'
+
+config CPU_FREQ_GOV_WINDCHILL
+	tristate "windchill cpufreq governor"
+	help
+	  Windchill (风驰) CPU frequency governor for Oblivionis-kernel.
+	  Inspired by OnePlus Windchill Game Kernel concepts:
+	  - Energy-aware model with EMA load tracking
+	  - Fast frequency ramp-up for bursty workloads
+	  - Smart ramp-down with hysteresis to prevent oscillation
+	  - Boost window for temporary high-frequency hold
+	  - Sweet-spot frequency selection for energy efficiency
+
+config CPU_FREQ_DEFAULT_GOV_WINDCHILL
+	bool "windchill"
+	depends on CPU_FREQ_GOV_WINDCHILL
+	help
+	  Use the windchill governor as the default cpufreq governor.
+KCONFIG_EOF
+        info "  已添加 CPU_FREQ_GOV_WINDCHILL 到 Kconfig"
+    fi
+
+    # 添加 Makefile 条目
+    add_makefile_entry drivers/cpufreq/Makefile \
+        'obj-$(CONFIG_CPU_FREQ_GOV_WINDCHILL) += cpufreq_windchill.o' \
+        'cpufreq_windchill'
+
+    record_success "Windchill 调速器: 已集成到 drivers/cpufreq/cpufreq_windchill.c"
+}
+
+# ###################################################################
 # 特性 5: ADIOS 3.2.0 (I/O 调度器)
 # ###################################################################
 integrate_adios() {
@@ -668,7 +719,7 @@ echo ""
 
 # 验证所有源码文件
 info "=== 检查本地源码文件 ==="
-for f in tcp_bbr3.c tcp_brutal.c tcp_c2tcp.c tcp_roccet.c adios.c ntsync.c; do
+for f in tcp_bbr3.c tcp_brutal.c tcp_c2tcp.c tcp_roccet.c adios.c ntsync.c cpufreq_windchill.c; do
     if [ -f "$SRC_DIR/$f" ]; then
         info "  [OK] $f ($(wc -l < "$SRC_DIR/$f") 行)"
     else
@@ -683,6 +734,7 @@ integrate_c2tcp                || true
 integrate_tcp_roccet           || true
 integrate_tcp_brutal           || true
 integrate_adios                || true
+integrate_windchill            || true
 integrate_ntsync               || true
 integrate_uksm                 || true
 integrate_wireguard            || true
@@ -716,6 +768,7 @@ info "=== 重要提示 ==="
 info "BBR v1 保持为默认 TCP 拥塞控制 (CONFIG_DEFAULT_TCP_CONG=\"bbr\")"
 info "BBRv3/C2TCP/ROCCET/Brutal 作为可选模块 (CONFIG_*_CONG_*=m)"
 info "ADIOS 作为默认 I/O 调度器 (如编译失败则回退到 mq-deadline)"
+info "Windchill (风驰) 调速器已集成 (可作为替代 cpufreq governor)"
 info "模块签名已禁用 (确保厂商模块可加载)"
 echo ""
 
