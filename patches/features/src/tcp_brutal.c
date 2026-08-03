@@ -23,6 +23,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/math64.h>
+#include <linux/version.h>
 #include <net/tcp.h>
 #include <linux/inet_diag.h>
 
