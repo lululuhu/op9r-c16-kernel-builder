@@ -95,6 +95,7 @@
 #include <linux/atomic.h>
 #include <linux/sched.h>
 #include <linux/sched/rt.h>
+#include <linux/sched/signal.h>
 #include <linux/string.h>
 
 /* ===================================================================
@@ -407,37 +408,50 @@ static bool wc_is_render_thread(const char *comm)
 static void wc_scan_tasks(struct windchill_policy *wp)
 {
 	struct windchill_tunables *t = wp->tunables;
-	struct rq *rq;
 	int cpu = wp->policy->cpu;
-	struct task_struct *p;
+	struct task_struct *g, *p;
 	unsigned int fg = 0, bg = 0, render = 0, rt = 0;
-
-	rq = cpu_rq(cpu);
-	if (!rq)
-		return;
 
 	rcu_read_lock();
 
-	/* 扫描运行队列 */
-	list_for_each_entry_rcu(p, &rq->cfs_tasks, se.group_node) {
-		int policy = p->policy;
-		int nice = task_nice(p);
+	/*
+	 * 遍历系统中所有进程的线程, 筛选与此 CPU 关联且可运行的任务。
+	 *
+	 * 注: 4.19 内核的 drivers/cpufreq 无法直接访问 scheduler 内部的
+	 * struct rq 和 cpu_rq() API, 因此使用 for_each_process_thread()
+	 * 替代 list_for_each_entry_rcu(p, &rq->cfs_tasks, ...)。
+	 * task_cpu(p) 返回任务最后运行的 CPU, 可用于关联到当前 policy。
+	 */
+	for_each_process_thread(g, p) {
+		int pol;
+		int nice_val;
+
+		/* 只统计与此 CPU 关联的任务 */
+		if (task_cpu(p) != cpu)
+			continue;
+
+		/* 只统计可运行的任务 (非睡眠状态) */
+		if (p->state != TASK_RUNNING)
+			continue;
+
+		pol = p->policy;
+		nice_val = task_nice(p);
 
 		/* 实时任务 */
-		if (policy == SCHED_FIFO || policy == SCHED_RR) {
+		if (pol == SCHED_FIFO || pol == SCHED_RR) {
 			rt++;
 			continue;
 		}
 
 		/* 渲染线程检测: comm 匹配 + 优先级足够高 */
 		if (wc_is_render_thread(p->comm) &&
-		    nice <= t->render_task_nice_thresh) {
+		    nice_val <= t->render_task_nice_thresh) {
 			render++;
 			continue;
 		}
 
 		/* 前台/后台分类 */
-		if (nice <= t->top_task_nice_thresh)
+		if (nice_val <= t->top_task_nice_thresh)
 			fg++;
 		else
 			bg++;
@@ -542,7 +556,9 @@ static void wc_build_energy_table(struct windchill_policy *wp)
 	unsigned int i, freq, power, best_eff;
 	int idx = 0;
 
-	table = cpufreq_frequency_get_table(policy->cpu);
+	/* 使用 policy->freq_table 获取频率表
+	 * (4.19 内核中 cpufreq_frequency_get_table() 未导出给模块使用) */
+	table = policy->freq_table;
 	if (!table) {
 		wp->sweet_spot_freq = wp->min_freq +
 			(wp->freq_range * WC_SWEET_SPOT_PCT / 100);
