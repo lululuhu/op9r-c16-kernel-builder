@@ -958,8 +958,8 @@ jobs:
           # -O3: 比 -O2 更激进的优化 (内联、向量化、循环展开)
           # -mllvm -polly: Clang/LLVM 的循环和多面体模型优化
           # -mllvm -polly-vectorizer=stripmine: Polly 循环分块向量化
-          export KCFLAGS="-Wno-error -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=address-of-packed-member -Wno-error=attribute-alias -Wno-unused-function -Wno-unused-variable -U_FORTIFY_SOURCE"
-          export CFLAGS_GCC="-Wno-error -Wno-unused-function -Wno-unused-variable"
+          export KCFLAGS="-Wno-error -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=address-of-packed-member -Wno-error=attribute-alias -Wno-error=strict-prototypes -Wno-unused-function -Wno-unused-variable -U_FORTIFY_SOURCE"
+          export CFLAGS_GCC="-Wno-error -Wno-error=strict-prototypes -Wno-unused-function -Wno-unused-variable"
           export CFLAGS_CLANG="-ftrivial-auto-var-init=zero -O3 -mllvm -polly -mllvm -polly-vectorizer=stripmine -mllvm -polly-parallel"
 
           # 隐藏 GitHub Actions runner 信息，使 /proc/version 显示干净的用户名/主机名
@@ -988,60 +988,76 @@ jobs:
             echo "=== BUILD FAILED (exit $BUILD_EXIT) — last 200 lines ==="
             tail -200 build.log
 
-            # ---- Fallback: disable features that may have failed to compile ----
-            echo "=== Attempting fallback: disabling potentially incompatible features ==="
-
-            # Always restore BBRv1 (in case BBRv3 source replaced it)
-            # BBRv3 is now a separate module, so this is just a precaution
-            # Disable BBRv3 and all potentially incompatible features
-            ./scripts/config --file out/.config --disable TCP_CONG_BBR3
-            ./scripts/config --file out/.config --disable MQ_IOSCHED_ADIOS
-            ./scripts/config --file out/.config --disable TCP_CONG_C2TCP
-            ./scripts/config --file out/.config --disable TCP_CONG_ROCCET
-            ./scripts/config --file out/.config --disable TCP_CONG_BRUTAL
-            ./scripts/config --file out/.config --disable UKSM
-            ./scripts/config --file out/.config --disable NTSYNC
-            ./scripts/config --file out/.config --disable DRM_EVDI
-            ./scripts/config --file out/.config --disable KFENCE
-            ./scripts/config --file out/.config --disable CRYPTO_LZ4K
-            ./scripts/config --file out/.config --disable CRYPTO_LZ4KD
-            ./scripts/config --file out/.config --disable LZ4K_COMPRESS
-            ./scripts/config --file out/.config --disable LZ4KD_COMPRESS
-            # Also disable THP in case it wasn't disabled by the fix step
+            # ---- Stage 1 Fallback: Only disable THP (root cause of mmu_notifier.h error) ----
+            # The mmu_notifier.h enum issue is THP-related, NOT caused by our features.
+            # Keep ALL advanced features (BBRv3, ADIOS, C2TCP, ROCCET, Brutal, UKSM, NTSYNC, etc.)
+            echo "=== Stage 1 Fallback: Disabling THP only (keeping all features) ==="
             ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE
             ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_ALWAYS
             ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_MADVISE
             ./scripts/config --file out/.config --disable THP_SWAP
-            # Disable new酷安移植特性 that may have failed to compile
-            ./scripts/config --file out/.config --disable BTRFS_FS 2>/dev/null || true
-            ./scripts/config --file out/.config --disable NTFS3_FS 2>/dev/null || true
-            ./scripts/config --file out/.config --disable SECURITY_LANDLOCK 2>/dev/null || true
-            ./scripts/config --file out/.config --disable KVM 2>/dev/null || true
-            ./scripts/config --file out/.config --disable VIRTUALIZATION 2>/dev/null || true
-            ./scripts/config --file out/.config --disable HID_PLAYSTATION 2>/dev/null || true
-            ./scripts/config --file out/.config --disable KPROBES 2>/dev/null || true
-            ./scripts/config --file out/.config --disable ZRAM_MULTI_COMP 2>/dev/null || true
-            # Also disable NFS (vendor cl_softerr bug)
+            # Also disable NFS (vendor cl_softerr bug — unrelated to our features)
             ./scripts/config --file out/.config --disable NFS_FS 2>/dev/null || true
             ./scripts/config --file out/.config --disable NFSD 2>/dev/null || true
             ./scripts/config --file out/.config --disable LOCKD 2>/dev/null || true
             ./scripts/config --file out/.config --disable SUNRPC 2>/dev/null || true
-            # Also revert -O3/Polly to -O2 in case optimization causes issues
-            # (KCFLAGS is set at build time, not in .config)
-            # Ensure BBRv1 is still enabled as default
-            ./scripts/config --file out/.config --enable TCP_CONG_BBR
-            ./scripts/config --file out/.config --set-str DEFAULT_TCP_CONG "bbr"
 
-            # Re-run olddefconfig and retry build
+            # Re-run olddefconfig and retry build with same optimization flags
             make ARCH=arm64 O=out olddefconfig
 
-            # Fallback: revert -O3/Polly to -O2 to avoid optimization-related build failures
-            echo "=== Retrying build with fallback config (reverting -O3/Polly to -O2) ==="
-            export KCFLAGS="-Wno-error -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=address-of-packed-member -Wno-error=attribute-alias -Wno-unused-function -Wno-unused-variable -U_FORTIFY_SOURCE"
-            export CFLAGS_CLANG="-ftrivial-auto-var-init=zero"
-
+            echo "=== Retrying build (Stage 1: THP disabled, -O3/Polly kept) ==="
             make O=out ARCH=arm64 LOCALVERSION_AUTO= -j$(nproc) 2>&1 | tee build.log
             BUILD_EXIT=${PIPESTATUS[0]}
+
+            if [ $BUILD_EXIT -ne 0 ]; then
+              echo "=== Stage 1 FAILED (exit $BUILD_EXIT) — last 200 lines ==="
+              tail -200 build.log
+
+              # ---- Stage 2 Fallback: Revert -O3/Polly to -O2 (keep all features) ----
+              echo "=== Stage 2 Fallback: Reverting -O3/Polly to -O2 (keeping all features) ==="
+              export KCFLAGS="-Wno-error -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=address-of-packed-member -Wno-error=attribute-alias -Wno-error=strict-prototypes -Wno-unused-function -Wno-unused-variable -U_FORTIFY_SOURCE"
+              export CFLAGS_CLANG="-ftrivial-auto-var-init=zero"
+
+              make O=out ARCH=arm64 LOCALVERSION_AUTO= -j$(nproc) 2>&1 | tee build.log
+              BUILD_EXIT=${PIPESTATUS[0]}
+            fi
+
+            if [ $BUILD_EXIT -ne 0 ]; then
+              echo "=== Stage 2 FAILED (exit $BUILD_EXIT) — last 200 lines ==="
+              tail -200 build.log
+
+              # ---- Stage 3 Fallback: Last resort — disable potentially problematic features ----
+              # Only disable features that might have compilation issues, one group at a time
+              echo "=== Stage 3 Fallback: Disabling potentially incompatible features (last resort) ==="
+              ./scripts/config --file out/.config --disable TCP_CONG_BBR3
+              ./scripts/config --file out/.config --disable MQ_IOSCHED_ADIOS
+              ./scripts/config --file out/.config --disable TCP_CONG_C2TCP
+              ./scripts/config --file out/.config --disable TCP_CONG_ROCCET
+              ./scripts/config --file out/.config --disable TCP_CONG_BRUTAL
+              ./scripts/config --file out/.config --disable UKSM
+              ./scripts/config --file out/.config --disable NTSYNC
+              ./scripts/config --file out/.config --disable DRM_EVDI
+              ./scripts/config --file out/.config --disable KFENCE
+              ./scripts/config --file out/.config --disable CRYPTO_LZ4K
+              ./scripts/config --file out/.config --disable CRYPTO_LZ4KD
+              ./scripts/config --file out/.config --disable LZ4K_COMPRESS
+              ./scripts/config --file out/.config --disable LZ4KD_COMPRESS
+              ./scripts/config --file out/.config --disable BTRFS_FS 2>/dev/null || true
+              ./scripts/config --file out/.config --disable NTFS3_FS 2>/dev/null || true
+              ./scripts/config --file out/.config --disable SECURITY_LANDLOCK 2>/dev/null || true
+              ./scripts/config --file out/.config --disable HID_PLAYSTATION 2>/dev/null || true
+              ./scripts/config --file out/.config --disable ZRAM_MULTI_COMP 2>/dev/null || true
+              # Ensure BBRv1 is still enabled as default
+              ./scripts/config --file out/.config --enable TCP_CONG_BBR
+              ./scripts/config --file out/.config --set-str DEFAULT_TCP_CONG "bbr"
+
+              make ARCH=arm64 O=out olddefconfig
+
+              echo "=== Retrying build (Stage 3: features disabled, -O2) ==="
+              make O=out ARCH=arm64 LOCALVERSION_AUTO= -j$(nproc) 2>&1 | tee build.log
+              BUILD_EXIT=${PIPESTATUS[0]}
+            fi
+
             if [ $BUILD_EXIT -ne 0 ]; then
               echo "=== BUILD STILL FAILED (exit $BUILD_EXIT) — last 300 lines ==="
               tail -300 build.log
@@ -1073,7 +1089,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log-${{ env.VARIANT }}-${{ github.run_number }}
-          path: ~/kernel/build.log
+          path: $HOME/kernel/build.log
           retention-days: 7
           if-no-files-found: warn
 
@@ -1082,7 +1098,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kernel-config-${{ env.VARIANT }}-${{ github.run_number }}
-          path: ~/kernel/out/.config
+          path: $HOME/kernel/out/.config
           retention-days: 7
           if-no-files-found: warn
 

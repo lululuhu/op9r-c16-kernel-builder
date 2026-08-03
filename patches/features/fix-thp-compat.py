@@ -194,6 +194,80 @@ def fix_mmu_notifier(kernel_dir):
         return False
 
 
+def fix_mmu_notifier_enum(kernel_dir):
+    """Fix mmu_notifier.h: add enum mmu_notifier_event definition if missing.
+
+    The vendor kernel's mmu_notifier.h uses 'enum mmu_notifier_event' in the
+    mmu_notifier_range_init() function declaration, but the enum may not be
+    defined before that point. This causes:
+      error: parameter 2 ('event') has incomplete type
+      error: function declaration isn't a prototype [-Werror=strict-prototypes]
+
+    This fix adds the enum definition before the function if it's missing.
+    """
+    notifier_path = os.path.join(kernel_dir, 'include/linux/mmu_notifier.h')
+
+    if not os.path.exists(notifier_path):
+        print("[THP-FIX] mmu_notifier.h not found, skipping enum fix")
+        return True
+
+    content = read_file(notifier_path)
+
+    # Check if mmu_notifier_range_init uses enum mmu_notifier_event
+    if 'enum mmu_notifier_event' not in content:
+        print("[THP-FIX] enum mmu_notifier_event not used in mmu_notifier.h, skipping")
+        return True
+
+    # Check if the enum is already defined (not just used in a parameter)
+    # Look for "enum mmu_notifier_event {" or a typedef
+    if re.search(r'enum\s+mmu_notifier_event\s*\{', content):
+        print("[THP-FIX] enum mmu_notifier_event already defined in mmu_notifier.h")
+        return True
+
+    # Also check if it's defined as a typedef elsewhere
+    # In mainline 4.19, the enum might be defined in a different header
+    # Check if MMU_NOTIFY_CLEAR is defined (it's a value of this enum)
+    if 'MMU_NOTIFY_CLEAR' not in content:
+        # The enum values aren't defined here either — add the full enum
+        enum_def = (
+            '\nenum mmu_notifier_event {\n'
+            '\tMMU_NOTIFY_UNMAP = 0,\n'
+            '\tMMU_NOTIFY_CLEAR,\n'
+            '\tMMU_NOTIFY_PROTECTION_VMA,\n'
+            '\tMMU_NOTIFY_SOFT_DIRTY,\n'
+            '\tMMU_MIGRATE,\n'
+            '\tMMU_NOTIFY_RELEASE,\n'
+            '};\n'
+        )
+
+        # Insert before the first use of enum mmu_notifier_event
+        # Find the mmu_notifier_range_init function declaration
+        match = re.search(r'(static inline void mmu_notifier_range_init)', content)
+        if match:
+            insert_pos = match.start()
+            content = content[:insert_pos] + enum_def + '\n' + content[insert_pos:]
+            write_file(notifier_path, content)
+            print("[THP-FIX] Added enum mmu_notifier_event definition to mmu_notifier.h")
+            return True
+        else:
+            # Insert at a reasonable position — after the includes/guards
+            # Find the struct mmu_notifier_range definition
+            match = re.search(r'(struct mmu_notifier_range)', content)
+            if match:
+                insert_pos = match.start()
+                content = content[:insert_pos] + enum_def + '\n' + content[insert_pos:]
+                write_file(notifier_path, content)
+                print("[THP-FIX] Added enum mmu_notifier_event definition to mmu_notifier.h (before struct)")
+                return True
+            else:
+                print("[THP-FIX] WARNING: Could not find insertion point for enum in mmu_notifier.h")
+                return False
+    else:
+        # MMU_NOTIFY_CLEAR is defined but enum isn't — might be #define
+        print("[THP-FIX] MMU_NOTIFY_CLEAR found but enum not defined — may use #define, skipping")
+        return True
+
+
 def fix_maybe_mkwrite(kernel_dir):
     """Fix maybe_mkwrite() calls to use vma->vm_flags instead of vma."""
     for filename in ['mm/huge_memory.c', 'mm/khugepaged.c', 'mm/memory.c']:
@@ -280,6 +354,14 @@ def main():
             success = False
     except Exception as e:
         print(f"[THP-FIX] ERROR fixing mmu_notifier: {e}")
+        success = False
+
+    # Fix 2b: mmu_notifier.h enum definition (causes prepare0 build failure)
+    try:
+        if not fix_mmu_notifier_enum(kernel_dir):
+            success = False
+    except Exception as e:
+        print(f"[THP-FIX] ERROR fixing mmu_notifier enum: {e}")
         success = False
 
     # Fix 3: maybe_mkwrite in multiple files
