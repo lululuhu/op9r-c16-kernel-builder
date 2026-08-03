@@ -381,6 +381,23 @@ jobs:
 
           echo "=== Feature integration complete ==="
 
+          # ---- Post-integration cleanup: remove stub features without source ----
+          # integrate-features.sh adds Kconfig/Makefile entries for EVDI but
+          # doesn't create the actual source directory (drivers/gpu/drm/evdi/).
+          # This causes Makefile.modbuiltin to fail: "No rule to make target
+          # '../drivers/gpu/drm/evdi/Makefile'". Remove the entry if source is missing.
+          echo "=== Post-integration cleanup ==="
+          if grep -q "evdi" drivers/gpu/drm/Makefile 2>/dev/null; then
+            if [ ! -d "drivers/gpu/drm/evdi" ] || [ ! -f "drivers/gpu/drm/evdi/Makefile" ]; then
+              echo "[FIX] EVDI source directory missing — removing Makefile/Kconfig entries"
+              sed -i '/evdi/d' drivers/gpu/drm/Makefile
+              sed -i '/DRM_EVDI/,/^$/d' drivers/gpu/drm/Kconfig 2>/dev/null || true
+              echo "[FIX] EVDI entries removed (source not available for 4.19)"
+            else
+              echo "[OK] EVDI source directory exists"
+            fi
+          fi
+
       - name: Verify feature availability in kernel source
         run: |
           cd $HOME/kernel
@@ -669,6 +686,19 @@ jobs:
 
           # Disable XDP_SOCKETS_DIAG — 4.19 xdp_umem struct missing fields
           ./scripts/config --file out/.config --disable XDP_SOCKETS_DIAG
+
+          # ---- Disable NFS — vendor kernel bug: cl_softerr missing from rpc_clnt ----
+          # fs/nfs/client.c references rpc_clnt->cl_softerr which doesn't exist
+          # in the 4.19 vendor sunrpc header. NFS is unnecessary on a phone kernel.
+          ./scripts/config --file out/.config --disable NFS_FS
+          ./scripts/config --file out/.config --disable NFS_V3
+          ./scripts/config --file out/.config --disable NFS_V4
+          ./scripts/config --file out/.config --disable NFSD
+          ./scripts/config --file out/.config --disable NFSD_V3
+          ./scripts/config --file out/.config --disable NFSD_V4
+          ./scripts/config --file out/.config --disable LOCKD
+          ./scripts/config --file out/.config --disable SUNRPC
+          ./scripts/config --file out/.config --disable SUNRPC_GSS
 
           # ---- Droidspaces: ensure key configs for container support ----
           ./scripts/config --file out/.config --enable NAMESPACES
@@ -987,6 +1017,11 @@ jobs:
             ./scripts/config --file out/.config --disable HID_PLAYSTATION 2>/dev/null || true
             ./scripts/config --file out/.config --disable KPROBES 2>/dev/null || true
             ./scripts/config --file out/.config --disable ZRAM_MULTI_COMP 2>/dev/null || true
+            # Also disable NFS (vendor cl_softerr bug)
+            ./scripts/config --file out/.config --disable NFS_FS 2>/dev/null || true
+            ./scripts/config --file out/.config --disable NFSD 2>/dev/null || true
+            ./scripts/config --file out/.config --disable LOCKD 2>/dev/null || true
+            ./scripts/config --file out/.config --disable SUNRPC 2>/dev/null || true
             # Also revert -O3/Polly to -O2 in case optimization causes issues
             # (KCFLAGS is set at build time, not in .config)
             # Ensure BBRv1 is still enabled as default

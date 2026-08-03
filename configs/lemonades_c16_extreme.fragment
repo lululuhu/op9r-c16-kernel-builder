@@ -803,9 +803,11 @@ CONFIG_CIFS_XATTR=y
 CONFIG_CIFS_POSIX=y
 
 # ---- NFS 客户端支持 ----
-CONFIG_NFS_FS=y
-CONFIG_NFS_V3=y
-CONFIG_NFS_V4=y
+# DISABLED: 厂商 4.19 内核 fs/nfs/client.c 引用 cl_softerr 但
+# struct rpc_clnt 无此成员，编译报错。手机不需要 NFS。
+# CONFIG_NFS_FS is not set
+# CONFIG_NFS_V3 is not set
+# CONFIG_NFS_V4 is not set
 
 # ---- ISOFS (光盘镜像) ----
 CONFIG_ISO9660_FS=y
