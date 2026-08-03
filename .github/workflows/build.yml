@@ -946,17 +946,20 @@ jobs:
           # Vendor code has many warnings treated as errors
           # Also disable FORTIFY_SOURCE for legacy vendor code with undersized buffers
           # Add specific -Wno-error= for vendor kernel's cherry-picked -Werror= flags
-          # NOTE: -ftrivial-auto-var-init=zero 是 Clang 选项，不能放在 KCFLAGS 里
-          #   因为 KCFLAGS 也会传给 GCC 编译的 host 工具 (scripts/mod/)，GCC 不认识会报错。
-          #   改用 CFLAGS_GCC 分离: 仅内核代码用 Clang 编译时生效。
           #
-          # 酷安内核编译优化: -O3 + Polly (Clang 多面体优化)
+          # CRITICAL: KCFLAGS 会传给所有编译器 (包括 GCC 编译的 host 工具如 scripts/mod/)
+          # 所以 KCFLAGS 中只能放 GCC 和 Clang 都认识的通用选项 (-Wno-error, -U_FORTIFY_SOURCE)
+          # Clang 专属选项 (-O3, -mllvm -polly, -ftrivial-auto-var-init=zero) 必须放在:
+          #   - CFLAGS_CLANG: 仅对 Clang 编译的内核代码生效
+          #   - 不能放在 KCFLAGS: 否则 GCC host 工具报 "unrecognized command-line option"
+          #
+          # 编译优化: -O3 + Polly (Clang/LLVM 多面体优化)
           # -O3: 比 -O2 更激进的优化 (内联、向量化、循环展开)
           # -mllvm -polly: Clang/LLVM 的循环和多面体模型优化
           # -mllvm -polly-vectorizer=stripmine: Polly 循环分块向量化
-          export KCFLAGS="-Wno-error -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=address-of-packed-member -Wno-error=attribute-alias -Wno-unused-function -Wno-unused-variable -U_FORTIFY_SOURCE -O3 -mllvm -polly -mllvm -polly-vectorizer=stripmine -mllvm -polly-parallel"
+          export KCFLAGS="-Wno-error -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=address-of-packed-member -Wno-error=attribute-alias -Wno-unused-function -Wno-unused-variable -U_FORTIFY_SOURCE"
           export CFLAGS_GCC="-Wno-error -Wno-unused-function -Wno-unused-variable"
-          export CFLAGS_CLANG="-ftrivial-auto-var-init=zero -O3 -mllvm -polly"
+          export CFLAGS_CLANG="-ftrivial-auto-var-init=zero -O3 -mllvm -polly -mllvm -polly-vectorizer=stripmine -mllvm -polly-parallel"
 
           # 隐藏 GitHub Actions runner 信息，使 /proc/version 显示干净的用户名/主机名
           # 原始: (runner@runnervmliwqe) → 改为: (Oblivionis@lemonades)
