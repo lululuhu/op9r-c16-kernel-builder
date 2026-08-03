@@ -997,15 +997,22 @@ jobs:
             # ---- Stage 1 Fallback: Disable known-problematic vendor-incompatible features ----
             # THP: mmu_notifier_range_init macro argument mismatch
             # ADIOS: blk_mq_sched_* API missing in vendor kernel (fixed in source, safety net)
+            # BBRv3: tcp_tso_autosize/TCP_CA_PRIV_SIZE missing in vendor kernel (fixed in source, safety net)
+            # C2TCP/ROCCET/Brutal: may have similar vendor API issues (safety net)
             # NFS: vendor cl_softerr bug
             # KVM: vendor kvm_main.c API mismatch
-            # All other features (BBRv3, C2TCP, ROCCET, Brutal, NTSYNC, Landlock, etc.) are KEPT
-            echo "=== Stage 1 Fallback: Disabling THP + ADIOS + NFS + KVM (keeping all other features) ==="
+            # All other features (NTSYNC, Landlock, Btrfs, DualSense, WireGuard, etc.) are KEPT
+            echo "=== Stage 1 Fallback: Disabling THP+ADIOS+TCP-CC+NFS+KVM (keeping all other features) ==="
             ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE
             ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_ALWAYS
             ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_MADVISE
             ./scripts/config --file out/.config --disable THP_SWAP
             ./scripts/config --file out/.config --disable MQ_IOSCHED_ADIOS
+            # TCP CC backports (BBRv1/CUBIC remain as defaults)
+            ./scripts/config --file out/.config --disable TCP_CONG_BBR3
+            ./scripts/config --file out/.config --disable TCP_CONG_C2TCP
+            ./scripts/config --file out/.config --disable TCP_CONG_ROCCET
+            ./scripts/config --file out/.config --disable TCP_CONG_BRUTAL
             # Also disable NFS (vendor cl_softerr bug — unrelated to our features)
             ./scripts/config --file out/.config --disable NFS_FS 2>/dev/null || true
             ./scripts/config --file out/.config --disable NFSD 2>/dev/null || true
@@ -1018,7 +1025,7 @@ jobs:
             # Re-run olddefconfig and retry build with same optimization flags
             make ARCH=arm64 O=out olddefconfig
 
-            echo "=== Retrying build (Stage 1: THP+ADIOS+NFS+KVM disabled, -O3/Polly kept) ==="
+            echo "=== Retrying build (Stage 1: THP+ADIOS+TCP-CC+NFS+KVM disabled, -O3/Polly kept) ==="
             make O=out ARCH=arm64 LOCALVERSION_AUTO= -j$(nproc) 2>&1 | tee build.log
             BUILD_EXIT=${PIPESTATUS[0]}
 
@@ -1039,13 +1046,9 @@ jobs:
               echo "=== Stage 2 FAILED (exit $BUILD_EXIT) — last 200 lines ==="
               tail -200 build.log
 
-              # ---- Stage 3 Fallback: Last resort — disable network/backport features ----
-              # ADIOS already disabled in Stage 1. Only disable remaining backported features.
-              echo "=== Stage 3 Fallback: Disabling backported features (last resort) ==="
-              ./scripts/config --file out/.config --disable TCP_CONG_BBR3
-              ./scripts/config --file out/.config --disable TCP_CONG_C2TCP
-              ./scripts/config --file out/.config --disable TCP_CONG_ROCCET
-              ./scripts/config --file out/.config --disable TCP_CONG_BRUTAL
+              # ---- Stage 3 Fallback: Last resort — disable remaining backport features ----
+              # ADIOS + TCP CC already disabled in Stage 1. Only disable remaining features.
+              echo "=== Stage 3 Fallback: Disabling remaining backported features (last resort) ==="
               ./scripts/config --file out/.config --disable UKSM
               ./scripts/config --file out/.config --disable NTSYNC
               ./scripts/config --file out/.config --disable DRM_EVDI

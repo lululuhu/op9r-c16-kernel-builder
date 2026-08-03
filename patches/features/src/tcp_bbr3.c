@@ -33,6 +33,23 @@
 #define SK_PACING_NEEDED 1
 #endif
 
+/* 4.19 compatibility: TCP_CA_PRIV_SIZE renamed to ICSK_CA_PRIV_SIZE in 5.4+ */
+#ifndef TCP_CA_PRIV_SIZE
+#define TCP_CA_PRIV_SIZE ICSK_CA_PRIV_SIZE
+#endif
+
+/* 4.19 vendor kernel may lack tcp_tso_autosize; provide simple fallback */
+#ifndef tcp_tso_autosize
+static inline u32 tcp_tso_autosize_compat(struct sock *sk, unsigned int mss_now,
+					   int gso_segs)
+{
+	u32 min_segs = (sk->sk_pacing_rate) ? max_t(u32, sk->sk_pacing_rate >> 10,
+						    gso_segs) : gso_segs;
+	return min(min_segs, 64U);
+}
+#define tcp_tso_autosize(sk, mss, gso) tcp_tso_autosize_compat(sk, mss, gso)
+#endif
+
 /* ---- BBR v3 constants ---- */
 #define BBR3_PROBE_RTT_INTERVAL	(10 * USEC_PER_SEC)	/* 10s */
 #define BBR3_MIN_RTT_WIN_SEC	25			/* 25s window (v3) */
