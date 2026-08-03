@@ -101,10 +101,9 @@ static void c2tcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct c2tcp *ca = c2tcp_ca(sk);
 
-	/* 4.19: tcp_is_cwnd_limited 需要 in_flight 参数，
-	 * cong_avoid 的第三个参数是 acked(新确认包数)而非 in_flight，
-	 * 因此用 tcp_packets_in_flight() 获取真实在途包数。 */
-	if (!tcp_is_cwnd_limited(sk, tcp_packets_in_flight(tp)))
+	/* 厂商 4.19 内核的 tcp_is_cwnd_limited 只接受 1 个参数 (sk)，
+	 * 内部自行计算 in_flight，无需外部传入。 */
+	if (!tcp_is_cwnd_limited(sk))
 		return;
 
 	/*
