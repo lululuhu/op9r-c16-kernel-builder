@@ -436,13 +436,18 @@ integrate_uksm() {
         return 0
     fi
 
-    # 添加 Kconfig 条目 (仅配置，源码需要单独 patch)
-    if [ -f "$SRC_DIR/uksm.c" ]; then
-        cp "$SRC_DIR/uksm.c" mm/uksm.c
-        info "  已复制 uksm.c 到 mm/"
-    else
-        info "  UKSM 源码不存在，仅添加配置项"
+    # 检查源码文件是否存在 — 没有源码就不能添加 Makefile/Kconfig 条目
+    # 否则会导致 "No rule to make target 'mm/uksm.o'" 编译错误
+    if [ ! -f "$SRC_DIR/uksm.c" ]; then
+        warn "  UKSM 源码不存在 (patches/features/src/uksm.c)，跳过集成"
+        warn "  不添加 Kconfig/Makefile 条目以避免编译错误"
+        record_skipped "UKSM: 源码文件不存在，未集成"
+        return 0
     fi
+
+    # 复制源码
+    cp "$SRC_DIR/uksm.c" mm/uksm.c
+    info "  已复制 uksm.c 到 mm/"
 
     cat >> mm/Kconfig << 'KCONFIG_EOF'
 
@@ -453,7 +458,6 @@ config UKSM
 	help
 	  UKSM 是 KSM 的增强版本，具有自动扫描和合并功能。
 	  相比原生 KSM，UKSM 提供更智能的页面合并策略。
-	  注意: 需要相应的内核 patch 才能完全工作。
 KCONFIG_EOF
 
     if ! grep -q "uksm" mm/Makefile 2>/dev/null; then
@@ -461,7 +465,8 @@ KCONFIG_EOF
         echo 'obj-$(CONFIG_UKSM) += uksm.o' >> mm/Makefile
     fi
 
-    record_success "UKSM: 已添加配置项 (需要单独的源码 patch)"
+    record_success "UKSM: 已添加配置项和源码"
+
 }
 
 # ###################################################################

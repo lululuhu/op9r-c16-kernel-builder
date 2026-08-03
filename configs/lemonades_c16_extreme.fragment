@@ -369,8 +369,10 @@ CONFIG_SCHED_CORE_CTL=y
 # 新增特性配置 (v2)
 # ===================================================================
 
-# ---- UKSM: Ultra KSM (增强版 KSM，自动扫描合并) ----
-CONFIG_UKSM=y
+# ---- UKSM: 未集成 (源码文件不存在，仅保留 KSM) ----
+# UKSM 源码 (patches/features/src/uksm.c) 不存在，无法集成。
+# 保留原生 KSM (CONFIG_KSM=y) 作为页面合并方案。
+# CONFIG_UKSM is not set
 
 # ---- NTSYNC: NT 同步原语驱动 (Wine/Proton 兼容) ----
 # 改为内置: AnyKernel3 boot-only 不安装模块
@@ -380,14 +382,14 @@ CONFIG_NTSYNC=y
 # 改为内置: AnyKernel3 boot-only 不安装模块
 CONFIG_DRM_EVDI=y
 
-# ---- THP: 透明大页 (优化内存管理) ----
-# 注意: 厂商内核的 THP 代码存在 API 不一致问题 (rmap.h/mmu_notifier.h 更新但
-# huge_memory.c/khugepaged.c 未更新)。构建系统会运行 Python 脚本修复这些问题。
-# 如果修复失败，THP 将被自动禁用以确保构建成功。
-CONFIG_TRANSPARENT_HUGEPAGE=y
-CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y
-CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
-CONFIG_THP_SWAP=y
+# ---- THP: 已禁用 (厂商内核 mmu_notifier_range_init 宏参数不匹配) ----
+# 厂商内核的 mmu_notifier_range_init 宏需要 7 个参数, 但 khugepaged.c
+# 只传了 6 个, 导致编译失败。THP 修复脚本无法完全修复此问题。
+# THP 在手机上收益有限, 禁用以确保构建成功并保留所有其他特性。
+# CONFIG_TRANSPARENT_HUGEPAGE is not set
+# CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS is not set
+# CONFIG_TRANSPARENT_HUGEPAGE_MADVISE is not set
+# CONFIG_THP_SWAP is not set
 
 # ---- 内存回收优化 ----
 # 更积极的内存回收策略

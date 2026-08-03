@@ -9,7 +9,7 @@
 #   - ADIOS 3.2.0 I/O scheduler (default)
 #   - BBRv3 TCP congestion control (default) + C2TCP + TCP ROCCET + TCP Brutal+ECN
 #   - ZRAM built-in with LZ4K/LZ4KD/LZ4HC/842/ZSTD (default LZ4KD)
-#   - UKSM, NTSYNC, Lindroid EVDI
+#   - UKSM (未集成, 源码缺失), NTSYNC, Lindroid EVDI
 #   - MGLRU/Zswap/THP/memory reclaim/F2FS/EROFS optimizations
 #   - Droidspaces/Mountify/WireGuard/IPSet support
 #   - Android 17 AOSP GSI compatibility
@@ -367,7 +367,7 @@ jobs:
           cd $HOME/kernel
           echo "=== Integrating advanced kernel features ==="
           echo "Features: BBRv3, C2TCP, TCP ROCCET, TCP Brutal+ECN, ADIOS 3.2.0,"
-          echo "          UKSM, NTSYNC, EVDI, LZ4K/LZ4KD, WireGuard, Droidspaces,"
+          echo "          NTSYNC, EVDI, LZ4K/LZ4KD, WireGuard, Droidspaces,"
           echo "          Network stability, Android 17 GSI compat"
 
           INTEGRATE_SCRIPT="$GITHUB_WORKSPACE/patches/features/integrate-features.sh"
@@ -749,8 +749,11 @@ jobs:
           # 编译时默认设为 mq-deadline (安全回退)；ADIOS 在 init 脚本中设为运行时默认
           ./scripts/config --file out/.config --enable MQ_IOSCHED_DEADLINE
 
-          # ---- UKSM: Ultra KSM ----
-          ./scripts/config --file out/.config --enable UKSM 2>/dev/null || true
+          # ---- UKSM: 未集成 (源码文件不存在) ----
+          # UKSM 源码 (patches/features/src/uksm.c) 不存在，集成脚本会跳过。
+          # 不启用 UKSM 以避免 "No rule to make target 'mm/uksm.o'" 编译错误。
+          # 保留原生 KSM (CONFIG_KSM=y) 作为页面合并方案。
+          # ./scripts/config --file out/.config --enable UKSM 2>/dev/null || true
 
           # ---- NTSYNC: NT sync primitives (内置) ----
           ./scripts/config --file out/.config --enable NTSYNC 2>/dev/null || true
@@ -761,19 +764,15 @@ jobs:
           # ---- Zswap: compressed swap cache ----
           ./scripts/config --file out/.config --enable ZSWAP
 
-          # ---- THP: Transparent Huge Pages ----
-          # Only enable if the Python fix script succeeded
-          if [ "${{ env.THP_DISABLED }}" = "true" ]; then
-            echo "::notice::THP DISABLED — vendor API compat fix failed, disabling to ensure build"
-            ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE
-            ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_ALWAYS
-            ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_MADVISE
-            ./scripts/config --file out/.config --disable THP_SWAP
-          else
-            echo "::notice::THP ENABLED — vendor API compat fix succeeded"
-            ./scripts/config --file out/.config --enable TRANSPARENT_HUGEPAGE
-            ./scripts/config --file out/.config --enable TRANSPARENT_HUGEPAGE_ALWAYS
-          fi
+          # ---- THP: 始终禁用 (厂商内核 mmu_notifier_range_init 宏参数不匹配) ----
+          # 厂商内核的 mmu_notifier_range_init 宏需要 7 个参数，但 khugepaged.c
+          # 只传了 6 个，THP 修复脚本无法完全修复此问题。
+          # THP 在手机上收益有限，禁用以确保构建成功并保留所有其他特性。
+          echo "::notice::THP DISABLED — vendor mmu_notifier_range_init macro arg count mismatch"
+          ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE
+          ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_ALWAYS
+          ./scripts/config --file out/.config --disable TRANSPARENT_HUGEPAGE_MADVISE
+          ./scripts/config --file out/.config --disable THP_SWAP
 
           # ---- Hibernation: 手机无用，关闭以减少攻击面 ----
           # HIBERNATION (休眠到磁盘) 在手机上无用，徒增攻击面与内核体积
