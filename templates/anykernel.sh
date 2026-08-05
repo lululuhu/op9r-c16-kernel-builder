@@ -34,6 +34,39 @@ PATCH_VBMETA_FLAG=auto;
 # boot install
 dump_boot;
 
+# ---- Oblivionis: 内核镜像验证 ----
+# AnyKernel3 的 flash_boot() 按文件名查找新内核 (Image.gz-dtb / Image.gz / Image 等)
+# 必须确保内核镜像以正确名称存在于 AK3 根目录，否则会静默回退到原始内核
+ui_print "- Verifying kernel image...";
+KERNEL_FOUND="";
+for k in Image.gz-dtb Image.gz-dtb.sig Image.gz Image Image.bz2 Image.bz2-dtb \
+         Image.lzo Image.lzo-dtb Image.lzma Image.lzma-dtb \
+         Image.xz Image.xz-dtb Image.lz4 Image.lz4-dtb Image.fit; do
+  if [ -f "$AKHOME/$k" ]; then
+    KERNEL_FOUND="$k";
+    break;
+  fi;
+done;
+if [ -n "$KERNEL_FOUND" ]; then
+  ui_print "  New kernel image: $KERNEL_FOUND";
+  KVER=$(strings "$AKHOME/$KERNEL_FOUND" 2>/dev/null | grep -m1 "Linux version" || true);
+  if [ -n "$KVER" ]; then
+    ui_print "  $KVER";
+  fi;
+  if echo "$KVER" | grep -q "Oblivionis"; then
+    ui_print "  [OK] Oblivionis kernel confirmed";
+  else
+    ui_print "  [WARN] Oblivionis string not found in kernel";
+  fi;
+else
+  ui_print "  FATAL: No kernel image found in AnyKernel3 directory!";
+  ui_print "  Files in AKHOME:";
+  ls -la "$AKHOME"/*.img "$AKHOME"/Image* "$AKHOME"/kernel* 2>/dev/null | while read line; do
+    ui_print "    $line";
+  done;
+  abort "Kernel image missing. Aborting to prevent flashing stock kernel.";
+fi;
+
 # ---- Oblivionis: 注入运行时调参 ----
 # 方案: 将 init.oblivionis.rc 注入 ramdisk，并 patch init.rc 添加 import
 ui_print "- Injecting Oblivionis runtime tuning...";
@@ -80,5 +113,9 @@ else
   done;
 fi;
 
+ui_print "- Writing boot image with new kernel...";
 write_boot;
+ui_print "- Oblivionis kernel flashed successfully!";
+ui_print "  Reboot to apply. Check version with:";
+ui_print "  uname -r   or   cat /proc/version";
 ## end boot install

@@ -1142,7 +1142,14 @@ jobs:
           git clone --depth=1 https://github.com/${{ env.ANYKERNEL_REPO }} AnyKernel3
           cd AnyKernel3
           KERNEL_IMG_PATH="$HOME/kernel/$KERNEL_IMG"
-          cp "$KERNEL_IMG_PATH" kernel
+          # CRITICAL: AnyKernel3's flash_boot() searches for kernel by its format name
+          # (Image.gz-dtb, Image.gz, Image, etc.) — NOT a generic "kernel" filename.
+          # Copying as "kernel" causes AK3 to silently fall back to the stock kernel.
+          cp "$KERNEL_IMG_PATH" "$KERNEL_IMG_NAME"
+          echo "=== Kernel image copied as: $KERNEL_IMG_NAME ==="
+          ls -la "$KERNEL_IMG_NAME"
+          # Verify it contains the Oblivionis version string
+          strings "$KERNEL_IMG_NAME" | grep -m1 "Linux version" || true
           # Also copy dtb if it exists separately
           [ -f "$HOME/kernel/out/arch/arm64/boot/dtb" ] && \
             cp "$HOME/kernel/out/arch/arm64/boot/dtb" dtb
@@ -1169,6 +1176,18 @@ jobs:
           # 设置完整路径供 release 步骤使用 (action-gh-release 不展开 ~)
           echo "RELEASE_ZIP_PATH=$HOME/AnyKernel3/${ZIP_NAME}.zip" >> $GITHUB_ENV
           echo "RELEASE_IMG_PATH=$HOME/kernel/${KERNEL_IMG}" >> $GITHUB_ENV
+
+          # ---- Verify kernel image is in the zip with correct name ----
+          echo "=== ZIP contents verification ==="
+          unzip -l "${ZIP_NAME}.zip" | grep -E "Image|kernel|dtb|anykernel|tools/ak3" || true
+          echo "=== Checking kernel image in zip ==="
+          if unzip -l "${ZIP_NAME}.zip" | grep -qE "Image\.gz-dtb|Image\.gz|^.*Image$"; then
+            echo "[OK] Kernel image found in zip with correct name"
+          else
+            echo "[FATAL] Kernel image NOT found in zip with recognized name!"
+            echo "AnyKernel3 will fall back to stock kernel. Aborting."
+            exit 1
+          fi
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
